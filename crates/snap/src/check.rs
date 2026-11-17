@@ -10,7 +10,7 @@ use kurbo::{Point, Vec2};
 use crate::frame::{Axis, Coincide, unit};
 use crate::index::canon;
 use crate::kind::Kind;
-use crate::query::{Constraint, Query, Rounding, Subject};
+use crate::query::{About, Constraint, Query, Rounding, Subject};
 use crate::result::{Broken, Mark, Snapped};
 use crate::targets::{SideLine, Targets, side_kind, side_lines};
 
@@ -179,9 +179,79 @@ fn on_lattice(co: &Coincide, v: f64, step: f64) -> bool {
     !(step.is_finite() && step > 0.0) || co.same(v, (v / step).round() * step) || !(v / step).is_finite()
 }
 
-/// A resize under a rounding: the point that led the drag (the middle of a moving side, or the dragged corner of a kept aspect) has the
-/// coordinate it moved along most on the lattice. The check does not repeat which point and which axis led: it asks that some point of the moving
-/// sides (their ends and middles) has a coordinate on the lattice, which a result with no rounding does not have except by chance.
+/// The points of a resized box whose coordinate the rounding sets, each with the page axes it may be set along (a point that leads along `x` is
+/// on the lattice in `x`; where its two components are equal it may lead along either). For plain sides that is the middle of each moving side, led
+/// along the page axis its own axis lies nearer to; for sides held together about the centre, the middle of the high side of each axis; under a
+/// kept aspect it is the dragged corner (or the middle of the dragged side), the carried point farthest from the fixed corner or the centre.
+/// The second part says whether one of them is enough: under a kept aspect there is one scale, so one leading coordinate, and the points
+/// tied for farthest (a corner dragged about the centre) are alternatives.
+fn leading_points(q: &Query<'_>, f: &crate::frame::TurnedBox, moving: &crate::query::Edges) -> (Vec<(Point, (bool, bool))>, bool) {
+    let c = f.corners();
+    let (u, v) = (f.u(), f.v());
+    let mid = |a: Point, b: Point| a.midpoint(b);
+    let axes = |w: Vec2| {
+        let (x, y) = (w.x.abs(), w.y.abs());
+        let tie = (x - y).abs() <= 1.0e-6 * x.max(y);
+        (x >= y || tie, y >= x || tie)
+    };
+    // The side and its three points: min-u, max-u, min-v, max-v.
+    let side = |i: usize| -> [Point; 3] {
+        match i {
+            0 => [c[0], mid(c[3], c[0]), c[3]],
+            1 => [c[1], mid(c[1], c[2]), c[2]],
+            2 => [c[0], mid(c[0], c[1]), c[1]],
+            _ => [c[3], mid(c[3], c[2]), c[2]],
+        }
+    };
+    let flags = [moving.u_min, moving.u_max, moving.v_min, moving.v_max];
+    match q.constraint {
+        Constraint::Centre => {
+            let mut out = Vec::new();
+            if flags[0] || flags[1] {
+                out.push((side(1)[1], axes(u)));
+            }
+            if flags[2] || flags[3] {
+                out.push((side(3)[1], axes(v)));
+            }
+            (out, false)
+        }
+        Constraint::Aspect { about, .. } => {
+            // The point the scale is about: the fixed corner, side middle or centre of the final box (the high side moved when `u_max` did).
+            let off = |moves_one_end: bool, high: bool, len: f64| {
+                if about == About::Fixed && moves_one_end { if high { -0.5 * len } else { 0.5 * len } } else { 0.0 }
+            };
+            let (mu, mv) = (moving.u_min != moving.u_max, moving.v_min != moving.v_max);
+            let fixed_point = f.centre + u * off(mu, moving.u_max, f.size.width) + v * off(mv, moving.v_max, f.size.height);
+            let mut carried: Vec<(Point, Vec2)> = Vec::new();
+            for (i, on) in flags.iter().enumerate() {
+                if *on {
+                    carried.extend(side(i).iter().map(|p| (*p, *p - fixed_point)));
+                }
+            }
+            let far = carried.iter().map(|(_, w)| w.hypot()).fold(0.0, f64::max);
+            let one_side = flags.iter().filter(|m| **m).count() == 1;
+            let out = carried
+                .into_iter()
+                .filter(|(p, w)| {
+                    w.hypot() > 0.0 && w.hypot() >= far * (1.0 - 1.0e-9) || (one_side && *p == side(flags.iter().position(|m| *m).unwrap_or(0))[1])
+                })
+                .map(|(p, w)| (p, axes(w)))
+                .collect();
+            (out, true)
+        }
+        _ => {
+            let mut out = Vec::new();
+            for (i, on) in flags.iter().enumerate() {
+                if *on {
+                    out.push((side(i)[1], axes(if i < 2 { u } else { v })));
+                }
+            }
+            (out, false)
+        }
+    }
+}
+
+/// A resize under a rounding: the points that lead the drag are on the lattice along the page axis they lead on.
 fn resize_rounding(snapped: &Snapped, q: &Query<'_>, moving: &crate::query::Edges) -> Result<(), Broken> {
     let (Some(f), co) = (snapped.frame, &q.settings.coincide) else { return Ok(()) };
     let (step, from) = match q.rounding {
@@ -190,21 +260,21 @@ fn resize_rounding(snapped: &Snapped, q: &Query<'_>, moving: &crate::query::Edge
         Rounding::Delta { step, from } => (step, from),
     };
     let valid = |s: f64| s.is_finite() && s > 0.0;
-    // A step as large as the box can round it away to nothing, and then the drag stands as it was given: the check asks only where it can.
     // The leading points of two sides are at least 0.7 of the box's side apart along the axis they lead on; a step wider than that can round both to one
-    // line, and then the drag stands as it was given.
+    // line, and then the drag stands as it was given: the check asks only where the rounding can be made.
     let small = step.x.max(step.y) < 0.7 * f.size.width.min(f.size.height);
     if !(valid(step.x) && valid(step.y)) || !small || f.size.width <= 0.0 || f.size.height <= 0.0 {
         return Ok(());
     }
-    let c = f.corners();
-    let sides: [(bool, [Point; 2]); 4] =
-        [(moving.u_min, [c[0], c[3]]), (moving.u_max, [c[1], c[2]]), (moving.v_min, [c[0], c[1]]), (moving.v_max, [c[3], c[2]])];
-    let on = |p: Point| on_lattice(co, p.x - from.x, step.x) || on_lattice(co, p.y - from.y, step.y);
-    // Held about the centre, or with the proportions kept, a side that was not dragged moves too.
-    let all = !matches!(q.constraint, Constraint::None);
-    let found = sides.iter().filter(|(flag, _)| *flag || all).any(|(_, [a, b])| on(*a) || on(*b) || on(a.midpoint(*b)));
-    if found || !sides.iter().any(|(flag, _)| *flag) { Ok(()) } else { broken("a resize's leading point is not on the lattice on either axis", f) }
+    let (points, any) = leading_points(q, &f, moving);
+    let on = |(p, (x, y)): &(Point, (bool, bool))| {
+        // A coordinate it leads along: both when its two components are alike.
+        let ok_x = on_lattice(co, p.x - from.x, step.x);
+        let ok_y = on_lattice(co, p.y - from.y, step.y);
+        (!*x || ok_x) && (!*y || ok_y) && (*x || *y)
+    };
+    let held = if any { points.iter().any(on) } else { points.iter().all(on) };
+    if held { Ok(()) } else { broken("a resize's leading point is not on the lattice along the axis it leads on", (f, points.len())) }
 }
 
 /// The rounding holds: the distance moved, or the min corner, is on its lattice, on the axes the constraint leaves to it.

@@ -313,7 +313,7 @@ mod resizes {
                 f.centre.x += 0.185;
                 f.size.width += 0.37;
             }),
-            "a resize's leading point is not on the lattice on either axis"
+            "a resize's leading point is not on the lattice along the axis it leads on"
         );
         // The same with the corner dragged and the proportions kept: every side may have moved.
         let kept = craft_snap::Query {
@@ -329,7 +329,7 @@ mod resizes {
                 f.size.width += 0.37;
                 f.size.height += 0.185;
             }),
-            "a resize's leading point is not on the lattice on either axis"
+            "a resize's leading point is not on the lattice along the axis it leads on"
         );
         // A step too wide for the box is not asked of it.
         let wide = craft_snap::Query {
