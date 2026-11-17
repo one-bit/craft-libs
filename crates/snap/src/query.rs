@@ -147,3 +147,28 @@ impl Detail for NoDetail {
     fn points(&mut self, _id: Id, _spend: &mut Spend<'_>, _out: &mut Vec<(Point, Kind, u32)>) {}
     fn outline(&mut self, _id: Id, _spend: &mut Spend<'_>, _out: &mut Vec<BezPath>) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use kurbo::Size;
+
+    use super::*;
+    use crate::frame::Anchors;
+
+    #[test]
+    fn the_far_of_a_subject_is_its_largest_coordinate_and_a_number_that_is_not_finite_counts_for_nothing() {
+        let f = TurnedBox { centre: Point::new(1.0e9, -2.0e9), size: Size::new(4.0, 2.0), angle: 0.0 };
+        assert_eq!(Subject::Point { at: Point::new(3.0, -7.0), base: None }.far(), 7.0);
+        let b = Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &[] };
+        assert_eq!(b.far(), 2.0e9 + 1.0);
+        assert_eq!(Subject::Edges { frame: f, moving: Edges::default() }.far(), 2.0e9 + 1.0);
+        let n = Subject::Nudge { frame: f, bounds: None, axis: Axis::X, forward: true, reach: NudgeReach::Anywhere, fallback: 1.0 };
+        assert_eq!(n.far(), 2.0e9 + 1.0);
+        assert_eq!(Subject::Rotate { pivot: Point::new(5.0, -9.0), angle: 0.0, radius: 1.0, step: None }.far(), 9.0);
+        // A point with one coordinate that is not a number is nowhere.
+        assert_eq!(Subject::Point { at: Point::new(f64::INFINITY, 5.0), base: None }.far(), 0.0);
+        assert_eq!(Subject::Point { at: Point::new(5.0, f64::NAN), base: None }.far(), 0.0);
+        let lost = TurnedBox { centre: Point::new(f64::INFINITY, 0.0), ..f };
+        assert_eq!(Subject::Edges { frame: lost, moving: Edges::default() }.far(), 0.0);
+    }
+}

@@ -915,3 +915,110 @@ mod size_marks {
         assert!(r.work.cut.has(Cuts::LINE_STEPS) && r.work.truncated, "{:?}", r.work);
     }
 }
+
+mod resize_pulls {
+    use craft_snap::{About, Edges, Id, Limits, Object, Parts, Rounding, TargetsBuilder};
+
+    use super::*;
+
+    fn widths(list: &[f64]) -> craft_snap::Targets {
+        let mut b = TargetsBuilder::new(Limits::default());
+        for (i, w) in list.iter().enumerate() {
+            let at = frame(500.0, 500.0 + i as f64 * 30.0, *w, 2.0, 0.0);
+            b.object(Id(i as u64 + 1), Object { frame: at, bounds: None, angle: None, parts: Parts { size: true, ..Parts::NONE } }).unwrap();
+        }
+        b.build()
+    }
+
+    fn drag(t: &craft_snap::Targets, f: TurnedBox, moving: Edges, constraint: Constraint) -> craft_snap::Snapped {
+        let s = Settings::default();
+        let q = craft_snap::Query { constraint, ..query(Subject::Edges { frame: f, moving }, &s) };
+        let r = run(t, &q);
+        r.check(t, &q).unwrap();
+        r
+    }
+
+    #[test]
+    fn a_size_match_is_taken_up_to_the_reach_and_not_past_it() {
+        let u_max = Edges { u_max: true, ..Edges::default() };
+        let f = frame(0.0, 0.0, 7.0, 5.0, 0.0);
+        // 5.5 more than the width is inside the reach of 6; 6.5 is outside it.
+        assert!(drag(&widths(&[12.5]), f, u_max, Constraint::None).hits.iter().any(|h| h.kind == Kind::Size));
+        assert!(drag(&widths(&[13.5]), f, u_max, Constraint::None).hits.is_empty());
+        // Sides that move together move half the way for the same pull: a width 11 more is 5.5 of travel.
+        let both = Edges { u_min: true, u_max: true, ..Edges::default() };
+        assert!(drag(&widths(&[18.0]), f, both, Constraint::Centre).hits.iter().any(|h| h.kind == Kind::Size));
+        assert!(drag(&widths(&[19.5]), f, both, Constraint::Centre).hits.is_empty());
+    }
+
+    #[test]
+    fn a_scale_is_pulled_by_how_far_its_corner_travels_and_not_by_how_much_it_scales() {
+        let corner = Edges { u_max: true, v_max: true, ..Edges::default() };
+        let aspect = Constraint::Aspect { ratio: 2.0, about: About::Fixed };
+        let f = frame(10.0, 5.0, 20.0, 10.0, 0.0);
+        // A width 8 more than the box's: the scale is 0.4 and the corner travels 0.4 of its diagonal, 8.9, past the reach.
+        assert!(drag(&widths(&[28.0]), f, corner, aspect).hits.is_empty());
+        // A width 2 more: 0.1 of the diagonal, 2.2, inside it.
+        assert!(drag(&widths(&[22.0]), f, corner, aspect).hits.iter().any(|h| h.kind == Kind::Size));
+        // The same with a guide: a line 7.5 off the corner along the page is 8.4 of travel along the diagonal.
+        let g = scene(&[], &[27.5], &[]);
+        assert!(drag(&g, f, corner, aspect).hits.is_empty());
+        let near = scene(&[], &[22.0], &[]);
+        assert!(drag(&near, f, corner, aspect).hits.iter().any(|h| h.kind == Kind::Guide));
+    }
+
+    #[test]
+    fn of_two_dragged_sides_the_one_that_would_flip_is_dropped_and_the_other_still_snaps() {
+        // The box is 4 wide with both its sides dragged. A guide at 4.2 would carry the low side past the high one, which is not offered; the high side
+        // takes it, and the box is 0.2 wider.
+        let (t, s) = (scene(&[], &[4.2], &[]), Settings::default());
+        let f = frame(2.0, 0.0, 4.0, 10.0, 0.0);
+        let q = query(Subject::Edges { frame: f, moving: Edges { u_min: true, u_max: true, ..Edges::default() } }, &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        let out = r.frame.unwrap();
+        assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+        assert!((out.corners()[1].x - 4.2).abs() < 1e-9 && (out.corners()[0].x - 0.0).abs() < 1e-9, "{out:?}");
+    }
+
+    #[test]
+    fn a_side_handle_under_a_kept_aspect_rounds_the_middle_of_its_side() {
+        // Turned by 0.7: the middle of a side moves mostly along x, and a corner of the side moves along y, so which one is rounded shows.
+        let f = frame(0.0, 0.0, 21.3, 10.65, 0.7);
+        let u_max = Edges { u_max: true, ..Edges::default() };
+        let t = scene(&[], &[], &[]);
+        let s = Settings::default();
+        let q = craft_snap::Query {
+            constraint: Constraint::Aspect { ratio: 2.0, about: About::Fixed },
+            rounding: Rounding::Position(vec2(2.0, 2.0)),
+            ..query(Subject::Edges { frame: f, moving: u_max }, &s)
+        };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        let c = r.frame.unwrap().corners();
+        let middle = c[1].midpoint(c[2]);
+        assert!(((middle.x / 2.0).round() * 2.0 - middle.x).abs() < 1e-9, "the middle of the dragged side is on the lattice along x: {middle:?}");
+    }
+
+    #[test]
+    fn a_rounding_step_that_is_not_a_pitch_rounds_nothing_and_one_that_is_not_a_number_is_refused() {
+        let t = scene(&[], &[], &[]);
+        let s = Settings::default();
+        let f = frame(0.0, 0.0, 21.3, 10.0, 0.0);
+        let u_max = Edges { u_max: true, ..Edges::default() };
+        for step in [vec2(0.0, 2.0), vec2(-2.0, 2.0)] {
+            let q = craft_snap::Query { rounding: Rounding::Position(step), ..query(Subject::Edges { frame: f, moving: u_max }, &s) };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            assert!((r.frame.unwrap().corners()[1].x - 10.65).abs() < 1e-9, "{step:?}: the side is where it was dragged: {:?}", r.frame);
+        }
+        let q = craft_snap::Query { rounding: Rounding::Position(vec2(f64::NAN, 2.0)), ..query(Subject::Edges { frame: f, moving: u_max }, &s) };
+        let r = run(&t, &q);
+        assert_eq!(r.work.refused, Some(craft_snap::Refusal::NotFinite));
+        r.check(&t, &q).unwrap();
+        // A step of no end is not a pitch either, and nothing breaks.
+        let q = craft_snap::Query { rounding: Rounding::Position(vec2(f64::INFINITY, 2.0)), ..query(Subject::Edges { frame: f, moving: u_max }, &s) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+    }
+}

@@ -548,3 +548,33 @@ pub(crate) fn edge_probes(cx: &Ctx<'_>, frame: &TurnedBox, moving: &Edges) -> Ve
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame::Coincide;
+
+    #[test]
+    fn a_box_is_sized_when_each_extent_is_more_than_the_same_place_rule_can_tell_from_nothing() {
+        let co = Coincide::default();
+        let ext = |w: f64, h: f64| Ext { a0: 0.0, a1: w, b0: 0.0, b1: h };
+        assert!(ext(5.0, 5.0).sized(&co));
+        assert!(!ext(co.abs, 5.0).sized(&co), "a width of exactly the rule is none");
+        assert!(!ext(5.0, co.abs).sized(&co), "a height of exactly the rule is none");
+        assert!(ext(2.0 * co.abs, 2.0 * co.abs).sized(&co));
+        assert!(!ext(-1.0, 5.0).sized(&co) && !ext(5.0, 0.0).sized(&co));
+    }
+
+    #[test]
+    fn a_degree_is_valid_when_the_box_it_leaves_is_sized_and_its_value_is_a_number() {
+        let co = Coincide::default();
+        let e = Ext { a0: 0.0, a1: 4.0, b0: 0.0, b1: 10.0 };
+        let side = DegKind::Side(SideId::UMax);
+        assert!(side.valid(&co, e, 1.0) && side.valid(&co, e, -3.0));
+        assert!(!side.valid(&co, e, -4.0), "no width left");
+        assert!(!side.valid(&co, e, -5.0), "flipped");
+        assert!(!side.valid(&co, e, f64::INFINITY) && !side.valid(&co, e, f64::NAN));
+        assert!(!DegKind::Side(SideId::VMin).valid(&co, e, 10.0));
+        assert!(DegKind::Half(true).valid(&co, e, -1.0) && !DegKind::Half(true).valid(&co, e, -2.0));
+    }
+}
