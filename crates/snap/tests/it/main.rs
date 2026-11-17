@@ -5,5 +5,6 @@ mod hostile;
 mod invariant;
 mod modes;
 mod moves;
+mod oracle;
 mod spacing;
 mod turns;
