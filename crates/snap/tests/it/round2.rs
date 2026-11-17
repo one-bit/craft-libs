@@ -589,3 +589,103 @@ mod two_clusters {
         assert!(!run(&empty, &q).work.truncated);
     }
 }
+
+mod marks_and_lattices_in_the_corners {
+    use craft_snap::{Constraint, Cuts, Mark, Targets};
+    use kurbo::Rect;
+
+    use super::*;
+
+    #[test]
+    fn a_step_of_angles_is_met_only_where_the_angle_the_steps_make_is_on_them() {
+        let t = scene(&[], &[], &[]);
+        // With a tolerance that is not relative to the size of the angle, the angle the steps make (a whole number of them from the zero) is off the
+        // lattice by the rounding of a number that big: no step is met there, and none is named.
+        let tight = Settings { coincide: craft_snap::Coincide { rel: 0.0, ..craft_snap::Coincide::default() }, ..Settings::default() };
+        let step = 0.1;
+        for raw in [1.0e3, 1.0e10, 1.0e12, 1.0e15, 1.0e20, 1.0e300] {
+            let rotate = |c, st| craft_snap::Query {
+                constraint: c,
+                ..query(Subject::Rotate { pivot: Point::ORIGIN, angle: raw, radius: 100.0, step: st }, &tight)
+            };
+            for q in [rotate(Constraint::None, Some((step, 0.0))), rotate(Constraint::Angles { step, zero: 0.0 }, None)] {
+                let r = run(&t, &q);
+                r.check(&t, &q).unwrap_or_else(|b| panic!("{raw:e}: {b:?}\n{r:?}"));
+                if raw >= 1.0e12 {
+                    assert!(!r.marks.iter().any(|m| matches!(m, Mark::Angle { step: Some(_), .. })), "{raw:e}: {:?}", r.marks);
+                    assert!(r.angle.is_none_or(|a| a == raw), "{raw:e}: a step that is not there is not met: {:?}", r.angle);
+                }
+            }
+        }
+        // The same angles under the rule everyone has (relative to the angle) meet their steps and pass the check.
+        let s = Settings::default();
+        for raw in [1.0e3, 1.0e12, 1.0e17] {
+            let q = query(Subject::Rotate { pivot: Point::ORIGIN, angle: raw, radius: 100.0, step: Some((step, 0.0)) }, &s);
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{raw:e}: {b:?}\n{r:?}"));
+        }
+    }
+
+    #[test]
+    fn a_nearest_line_span_picks_the_nearest_of_the_lines_of_different_kinds_at_one_place() {
+        // A guide at x = -5 with its extent above the subject, and the left sides of two boxes on it, one below the subject and the guide's extent
+        // above it: different kinds at one place, so each is its own entry and the marks pass chooses between them.
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        b.object(craft_snap::Id(1), object(frame(0.0, -40.0, 10.0, 10.0, 0.0))).unwrap();
+        b.line(Some(craft_snap::Id(900)), craft_snap::Axis::X, -5.0, Some((30.0, 60.0)), Kind::Guide).unwrap();
+        let t: Targets = b.build();
+        let off = |s: &mut Settings| {
+            for k in [Kind::Spacing, Kind::Corner, Kind::SideMiddle, Kind::Vertex, Kind::Midpoint, Kind::Nearest, Kind::Intersection, Kind::Size] {
+                let mut r = s.kinds.rule(k);
+                r.on = false;
+                s.kinds.set(k, r);
+            }
+        };
+        let span = |line_span| {
+            let mut s = Settings { line_span, ..Settings::default() };
+            off(&mut s);
+            let q = query(box_subject(frame(0.0, 1.0, 10.0, 10.0, 0.0)), &s);
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+            r.marks
+                .iter()
+                .find_map(|m| match m {
+                    Mark::Line { offset, segment, .. } if (offset + 5.0).abs() < 1e-9 => {
+                        Some((segment.p0.y.min(segment.p1.y), segment.p0.y.max(segment.p1.y)))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        // Every: from the box's far end (-45) to the guide's (60). Nearest: the subject's extent (-4 to 6) and the guide's (30 to 60), 24 away against
+        // the box's 31.
+        assert_eq!(span(craft_snap::LineSpan::Every), (-45.0, 60.0));
+        assert_eq!(span(craft_snap::LineSpan::Nearest), (-4.0, 60.0));
+        let _ = (Cuts::MARKS, Rect::ZERO);
+    }
+
+    #[test]
+    fn the_outlines_of_an_object_are_charged_one_path_at_a_time() {
+        // Five paths of 5,000 segments each: the pieces cap (16,384) holds three of them, and the rest are left out and said.
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        b.object(craft_snap::Id(1), object(frame(0.0, 0.0, 10.0, 10.0, 0.0))).unwrap();
+        for k in 0..5 {
+            let mut p = kurbo::BezPath::new();
+            p.move_to((-5.0, -5.0 + k as f64));
+            (0..5_000).for_each(|i| p.line_to((5.0 * if i % 2 == 0 { 1.0 } else { -1.0 }, -5.0 + k as f64 + 0.001 * i as f64)));
+            b.path(craft_snap::Id(1), p).unwrap();
+        }
+        let t = b.build();
+        // Only the end points of paths are asked for, so the charge for reading a path is the one cap there is.
+        let mut s = Settings::default();
+        for k in [Kind::Midpoint, Kind::Nearest, Kind::Intersection, Kind::Corner, Kind::SideMiddle] {
+            let mut r = s.kinds.rule(k);
+            r.on = false;
+            s.kinds.set(k, r);
+        }
+        let q = query(Subject::Point { at: Point::new(1.0, 1.0), base: None }, &s);
+        let r = run(&t, &q);
+        assert!(r.work.truncated && r.work.cut.has(Cuts::PIECES), "{:?}", r.work);
+        assert_eq!(r.work.pieces, 3 * 5_001, "three paths of 5,001 elements fit in 16,384; the fourth is not read");
+    }
+}

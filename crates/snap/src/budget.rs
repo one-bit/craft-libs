@@ -272,4 +272,19 @@ mod tests {
         assert!(!Cuts::default().any());
         assert!(Cuts(Cuts::MARKS).any() && Cuts(Cuts::MARKS).has(Cuts::MARKS) && !Cuts(Cuts::MARKS).has(Cuts::ROW));
     }
+
+    #[test]
+    fn a_query_gathers_sixteen_windows_and_the_seventeenth_is_refused_and_says_so() {
+        let mut work = Work::default();
+        for n in 1..=MAX_GATHERS {
+            assert!(work.gather(), "window {n}");
+            assert_eq!(work.gathers, n);
+        }
+        assert!(!work.cut.any() && !work.truncated, "sixteen is within the cap");
+        for _ in 0..5 {
+            assert!(!work.gather());
+        }
+        assert_eq!(work.gathers, MAX_GATHERS, "a refused window is not counted");
+        assert!(work.truncated && work.cut.has(Cuts::WINDOW_VISITS));
+    }
 }
