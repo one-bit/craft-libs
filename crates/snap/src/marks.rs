@@ -256,6 +256,14 @@ fn place_marks(cx: &Ctx<'_>, sol: &Solution) -> Vec<Mark> {
 
 /// The marks of the final geometry.
 pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
+    // The final geometry may be farther out than the subject was (a nudge that travels a long way): its own coordinates set what it can say.
+    let big = |p: kurbo::Point| if p.x.is_finite() && p.y.is_finite() { p.x.abs().max(p.y.abs()) } else { 0.0 };
+    let far =
+        cx.q.subject
+            .far()
+            .max(sol.frame.as_ref().map_or(0.0, |f| f.corners().iter().map(|c| big(*c)).fold(0.0, f64::max)))
+            .max(sol.point.map_or(0.0, big));
+    cx.co = cx.s.coincide.at(far);
     let mut out = Vec::new();
     if let Subject::Rotate { pivot, step, .. } = cx.q.subject {
         let hit_only = cx.s.marks == MarkRule::HitsOnly;

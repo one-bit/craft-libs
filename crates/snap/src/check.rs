@@ -480,6 +480,23 @@ impl Snapped {
     /// must be in the set: a line of those kinds there, the row's objects at a gap's ends, an object of that length or angle, a place there.
     /// This is what the tests assert.
     pub fn check(&self, targets: &Targets, query: &Query<'_>) -> Result<(), Broken> {
+        // Far from the origin the geometry the result carries is only as exact as the numbers there: the same-place rule is widened by what a
+        // number of that size cannot say, so a result is not called false for the rounding of its own coordinates.
+        let far = self.far(targets, query);
+        let mut settings = query.settings.clone();
+        settings.coincide = settings.coincide.at(far);
+        let widened = Query { settings: &settings, ..query.clone() };
+        self.check_with(targets, &widened)
+    }
+
+    /// The largest coordinate of the subject, the final geometry and the targets' origin.
+    fn far(&self, targets: &Targets, query: &Query<'_>) -> f64 {
+        let big = |p: Point| if p.x.is_finite() && p.y.is_finite() { p.x.abs().max(p.y.abs()) } else { 0.0 };
+        let frame = |f: &crate::frame::TurnedBox| f.corners().iter().map(|c| big(*c)).fold(0.0, f64::max);
+        query.subject.far().max(self.frame.as_ref().map_or(0.0, frame)).max(self.point.map_or(0.0, big)).max(big(targets.origin))
+    }
+
+    fn check_with(&self, targets: &Targets, query: &Query<'_>) -> Result<(), Broken> {
         if self.work.refused.is_some() {
             return if self.delta == Vec2::ZERO && self.marks.is_empty() { Ok(()) } else { broken("a refused query moved the subject", self.delta) };
         }

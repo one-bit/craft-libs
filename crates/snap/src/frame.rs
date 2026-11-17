@@ -95,6 +95,13 @@ impl Default for Coincide {
 }
 
 impl Coincide {
+    /// The rule for geometry whose largest coordinate is `far`: a number that big cannot say a place closer than its own spacing, so the absolute
+    /// part grows by a few of them. Far from the origin a result is then not called off its line for the rounding of its own coordinates.
+    pub fn at(&self, far: f64) -> Coincide {
+        let extra = if far.is_finite() { 16.0 * f64::EPSILON * far.abs() } else { 0.0 };
+        Coincide { abs: self.abs + extra, ..*self }
+    }
+
     /// Whether every number is finite and not negative.
     pub fn is_valid(&self) -> bool {
         [self.abs, self.rel, self.angle].iter().all(|v| v.is_finite() && *v >= 0.0)

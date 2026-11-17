@@ -34,6 +34,20 @@ pub enum Subject<'a> {
     Nudge { frame: TurnedBox, bounds: Option<kurbo::Rect>, axis: Axis, forward: bool, reach: NudgeReach, fallback: f64 },
 }
 
+impl Subject<'_> {
+    /// The largest coordinate of the subject (not a number that is not finite: those are refused before it is read).
+    pub(crate) fn far(&self) -> f64 {
+        let big = |p: Point| if p.x.is_finite() && p.y.is_finite() { p.x.abs().max(p.y.abs()) } else { 0.0 };
+        match self {
+            Subject::Point { at, .. } => big(*at),
+            Subject::Box { frame, .. } | Subject::Edges { frame, .. } | Subject::Nudge { frame, .. } => {
+                frame.corners().iter().map(|c| big(*c)).fold(0.0, f64::max)
+            }
+            Subject::Rotate { pivot, .. } => big(*pivot),
+        }
+    }
+}
+
 /// How far a nudge looks for a target.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NudgeReach {

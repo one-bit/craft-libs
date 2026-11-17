@@ -35,7 +35,7 @@ impl<'a> Ctx<'a> {
             t,
             q,
             s: q.settings,
-            co: q.settings.coincide,
+            co: q.settings.coincide.at(q.subject.far()),
             zoom: q.zoom,
             o: t.origin,
             work: Work::default(),
