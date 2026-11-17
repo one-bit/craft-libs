@@ -136,8 +136,6 @@ mod box_and_marks {
         let q = query(box_subject(frame(84.5, 90.5, 10.0, 10.0, 0.0)), &s);
         let r = run(&t, &q);
         assert!(r.marks.iter().any(|m| matches!(m, Mark::Place { .. })), "{:?}", r.marks);
-        let place = |r: &mut craft_snap::Snapped| r.marks.iter_mut().find(|m| matches!(m, Mark::Place { .. })).map(|m| m as *mut Mark);
-        let _ = place;
         assert_eq!(
             fires(&t, &q, |r| {
                 for m in &mut r.marks {
@@ -347,8 +345,6 @@ mod resizes {
         let t = scene(&[(1, frame(100.0, 100.0, 7.0, 2.0, 0.0))], &[], &[]);
         let s = Settings::default();
         let q = query(dragged(frame(0.0, 0.0, 7.2, 5.0, 0.0), Edges { u_max: true, ..Edges::default() }), &s);
-        let size = |r: &mut craft_snap::Snapped| -> *mut Mark { r.marks.iter_mut().find(|m| matches!(m, Mark::Size { .. })).unwrap() as *mut Mark };
-        let _ = size;
         let edit = |f: fn(&mut Mark)| {
             move |r: &mut craft_snap::Snapped| {
                 for m in &mut r.marks {
@@ -572,7 +568,6 @@ mod spacing_and_angles {
             "an angle mark has a step but the query has none"
         );
         // With a lattice in the query the step is checked against the angle.
-        let stepped = query(rotate(Some((5f64.to_radians(), 0.0))), &s);
         let nearest = Settings {
             kinds: {
                 let mut k = s.kinds.clone();
@@ -584,7 +579,6 @@ mod spacing_and_angles {
             ..Settings::default()
         };
         let stepped_only = query(rotate(Some((5f64.to_radians(), 0.0))), &nearest);
-        let _ = stepped;
         assert_eq!(
             fires(
                 &t,
