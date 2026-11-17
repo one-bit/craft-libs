@@ -504,7 +504,25 @@ mod reach_across {
             r.check(&t, &q).unwrap_or_else(|b| panic!("{a}: {b:?}"));
             assert!(r.hits.iter().any(|h| h.side.is_some_and(|(_, own)| own == craft_snap::OwnOrBounds::Own)), "{a}: {:?}", r.hits);
             assert!((r.frame.unwrap().centre - Point::ORIGIN).hypot() < 1e-9, "{a}: it lands back on the object's sides: {:?}", r.frame);
+            // The segment of a mark runs along the object's side and the subject's, which coincide here: it is no longer than one of them.
+            for m in &r.marks {
+                if let craft_snap::Mark::Line { segment, .. } = m {
+                    assert!((segment.p1 - segment.p0).hypot() <= 20.0 + 1e-6, "{a}: {m:?}");
+                }
+            }
         }
+    }
+
+    #[test]
+    fn lines_in_another_direction_are_not_lines_of_this_one() {
+        // The object's horizontal lines lie at y = 50 (its centre) and near 48 and 52, which are where the subject's vertical sides are in x; its
+        // vertical lines are at x = 500. Aligning in x must find none of them.
+        let t = scene(&[(1, frame(500.0, 50.0, 4.0, 4.0, 0.0))], &[], &[]);
+        let st = settings(2000.0);
+        let q = query(Subject::Box { frame: frame(50.0, 900.0, 4.0, 4.0, 0.0), bounds: None, u: Anchors::ALL, v: Anchors::NONE, own: &[] }, &st);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(r.hits.is_empty() && r.delta.x == 0.0, "{:?}", r.hits);
     }
 
     #[test]
