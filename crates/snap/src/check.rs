@@ -191,7 +191,9 @@ fn resize_rounding(snapped: &Snapped, q: &Query<'_>, moving: &crate::query::Edge
     };
     let valid = |s: f64| s.is_finite() && s > 0.0;
     // A step as large as the box can round it away to nothing, and then the drag stands as it was given: the check asks only where it can.
-    let small = step.x.max(step.y) < f.size.width.min(f.size.height);
+    // The leading points of two sides are at least 0.7 of the box's side apart along the axis they lead on; a step wider than that can round both to one
+    // line, and then the drag stands as it was given.
+    let small = step.x.max(step.y) < 0.7 * f.size.width.min(f.size.height);
     if !(valid(step.x) && valid(step.y)) || !small || f.size.width <= 0.0 || f.size.height <= 0.0 {
         return Ok(());
     }
