@@ -101,6 +101,136 @@ fn lattice_line(t: &Targets, q: &Query<'_>, kind: Kind, angle: f64, c: f64) -> b
     })
 }
 
+/// A target line on a mark's line: its kind, the side of its box it is (`None` for a line with no side) and its extent along the line (empty, `lo > hi`,
+/// for a line that runs on for ever).
+#[derive(Clone, Copy, Debug)]
+struct OnLine {
+    kind: Kind,
+    side: Option<crate::frame::Side>,
+    lo: f64,
+    hi: f64,
+}
+
+/// Every line of the targets, by brute force, in the direction `ac` at the offset `c`: the app's, each object's and the lattices'. A line the
+/// builder grouped with others at one place is each of its members here, with its own extent.
+fn lines_on(t: &Targets, q: &Query<'_>, ac: f64, c: f64) -> Vec<OnLine> {
+    let co = &q.settings.coincide;
+    let mut out = Vec::new();
+    for d in t.app.dirs.iter().filter(|d| same_direction(d.angle, ac, co)) {
+        for set in &d.sets {
+            for e in set.entries.iter().filter(|e| co.same(e.offset, c)) {
+                let members = e.m0 as usize..(e.m0 + e.mn) as usize;
+                match set.members.get(members).filter(|m| e.mn > 0 && !m.is_empty()) {
+                    Some(m) => out.extend(m.iter().map(|x| OnLine { kind: set.kind, side: set.side, lo: x.lo, hi: x.hi })),
+                    None => out.push(OnLine { kind: set.kind, side: set.side, lo: e.lo, hi: e.hi }),
+                }
+            }
+        }
+    }
+    for o in &t.objects {
+        for l in side_lines(&o.frame, o.bounds, t.origin, co, o.parts.own_lines) {
+            let wanted = if l.own == crate::frame::OwnOrBounds::Own { o.parts.own_lines } else { o.parts.bounds_lines || o.parts.own_lines };
+            let (a, flipped) = canon(l.angle, co.angle);
+            let (off, lo, hi) = if flipped { (-l.offset, -l.hi, -l.lo) } else { (l.offset, l.lo, l.hi) };
+            if wanted && same_direction(a, ac, co) && co.same(off, c) {
+                out.push(OnLine { kind: side_kind(l.side), side: Some(crate::frame::canon_side(l.side, flipped)), lo, hi });
+            }
+        }
+    }
+    for l in q.lattices {
+        if lattice_line(t, q, l.kind, ac, c) {
+            out.push(OnLine { kind: l.kind, side: None, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
+        }
+    }
+    out
+}
+
+/// Whether the matching rule lets a side of the subject meet a line of `kind` that is `target` of its box (or none).
+fn may_meet(matching: crate::settings::Matching, kind: Kind, side: crate::frame::Side, target: Option<crate::frame::Side>) -> bool {
+    use crate::settings::Matching;
+    match matching {
+        Matching::AnyToAny => true,
+        Matching::LikeToLike => !kind.has_side() || ((kind == Kind::Edge) == (side != crate::frame::Side::Mid)),
+        Matching::SameSide => !kind.has_side() || target.is_none_or(|t| t == side),
+    }
+}
+
+/// The rules a line mark keeps about which targets it stands for and how far it reaches along its line: every kind it names is a line a side of
+/// the subject may meet under the matching rule, and the segment is the subject's extent on the line joined with every target's extent (under
+/// `Every`) or with the extent of the one target nearest the subject and no other (under `Nearest`).
+fn line_targets(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark, ac: f64, c: f64, seg: (f64, f64)) -> Result<(), Broken> {
+    let Mark::Line { kinds, .. } = m else { return Ok(()) };
+    let (co, s) = (&q.settings.coincide, q.settings);
+    let mut subject: Vec<(crate::frame::Side, f64, f64)> = final_sides(t, snapped, q)
+        .into_iter()
+        .filter(|l| snapped.frame.is_none() || if l.own == crate::frame::OwnOrBounds::Own { s.frames.own } else { s.frames.page })
+        .filter_map(|l| {
+            let (a, flipped) = canon(l.angle, co.angle);
+            let (off, lo, hi) = if flipped { (-l.offset, -l.hi, -l.lo) } else { (l.offset, l.lo, l.hi) };
+            (same_direction(a, ac, co) && co.same(off, c)).then_some((crate::frame::canon_side(l.side, flipped), lo, hi))
+        })
+        .collect();
+    let lines = lines_on(t, q, ac, c);
+    if subject.is_empty() {
+        return Ok(());
+    }
+    for k in kinds {
+        let met = lines.iter().any(|l| l.kind == *k && subject.iter().any(|(side, _, _)| may_meet(s.matching, *k, *side, l.side)));
+        if !met {
+            return broken("a line mark names a target no side of the subject may meet under the matching rule", m);
+        }
+    }
+    // Which sides and lines the mark stands for.
+    let named: Vec<OnLine> = lines
+        .into_iter()
+        .filter(|l| kinds.contains(&l.kind) && subject.iter().any(|(side, _, _)| may_meet(s.matching, l.kind, *side, l.side)))
+        .collect();
+    subject.retain(|(side, _, _)| named.iter().any(|l| may_meet(s.matching, l.kind, *side, l.side)));
+    // Under a reach only the objects near the subject offer their lines, which this brute force does not repeat: the extents are asked of a
+    // query that has none.
+    if s.align_reach.is_some_and(|r| !matches!(r, crate::kind::Reach::Any)) {
+        return Ok(());
+    }
+    let exact = match q.subject {
+        Subject::Point { .. } | Subject::Nudge { .. } => true,
+        Subject::Box { u, v, .. } => u == crate::frame::Anchors::ALL && v == crate::frame::Anchors::ALL,
+        _ => false,
+    };
+    let spans: Vec<(f64, f64)> = named.iter().filter(|l| l.lo <= l.hi).map(|l| (l.lo, l.hi)).collect();
+    let ext = subject.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |e, (_, lo, hi)| (e.0.min(*lo), e.1.max(*hi)));
+    let joined = |with: &[(f64, f64)]| with.iter().fold(ext, |e, s| (e.0.min(s.0), e.1.max(s.1)));
+    let same_seg = |e: (f64, f64)| co.same(seg.0, e.0) && co.same(seg.1, e.1);
+    let covers = |e: (f64, f64)| seg.0 <= e.0 + co.tol(seg.0, e.0) && seg.1 >= e.1 - co.tol(seg.1, e.1);
+    match s.line_span {
+        crate::settings::LineSpan::Every => {
+            // The segment covers every target's extent (and, when the subject's sides are all known, is exactly their join).
+            if !spans.iter().all(|sp| covers(*sp)) || (exact && !same_seg(joined(&spans))) {
+                return broken("a line mark does not reach every target on its line", m);
+            }
+        }
+        crate::settings::LineSpan::Nearest => {
+            let gap = |sp: &(f64, f64)| {
+                if sp.1 < ext.0 {
+                    ext.0 - sp.1
+                } else if sp.0 > ext.1 {
+                    sp.0 - ext.1
+                } else {
+                    0.0
+                }
+            };
+            let least = spans.iter().map(gap).fold(f64::INFINITY, f64::min);
+            let tied: Vec<(f64, f64)> = spans.iter().copied().filter(|sp| co.same(gap(sp), least) || gap(sp) <= least).collect();
+            let reaches = spans.is_empty() || tied.iter().any(|sp| covers(*sp));
+            // No extent beyond the subject's and the nearest target's: one of the tied nearest, and no other.
+            let exactly = !exact || spans.is_empty() || tied.iter().any(|sp| same_seg(joined(&[*sp])));
+            if !(reaches && exactly) {
+                return broken("a line mark does not reach the nearest target on its line, or reaches another", m);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A line mark: a side of the final geometry is on it, its segment covers that side, and a line of each kind it names is in the targets.
 fn line_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
     let Mark::Line { direction, offset, segment, kinds, .. } = m else { return Ok(()) };
@@ -139,6 +269,13 @@ fn line_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<
         if !target_line(t, q, *k, ac, c) {
             return broken("a line mark names a target that is not in the set", m);
         }
+    }
+    // Which targets it stands for under the matching rule, and how far it reaches (a side in the page's directions only: the other marks of a
+    // resize go through a point, not a side).
+    // (A resize labels the sides it moves by its own axes, which a box turned by whole quarters has the other way round from its page sides, so the
+    // labels are not compared there.)
+    if on && !matches!(q.subject, Subject::Edges { .. }) {
+        line_targets(t, q, snapped, m, ac, c, (t0.min(t1), t0.max(t1)))?;
     }
     Ok(())
 }
@@ -390,6 +527,34 @@ fn hits_have_marks(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
     Ok(())
 }
 
+/// A nudge stops on its target strictly ahead, within its reach, or moves exactly by the fallback when there is none.
+fn nudge_stops(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
+    let Subject::Nudge { axis, forward, reach, fallback, .. } = q.subject else { return Ok(()) };
+    let co = &q.settings.coincide;
+    let e = axis.unit() * if forward { 1.0 } else { -1.0 };
+    let d = snapped.delta.dot(e);
+    if !d.is_finite() {
+        return broken("a nudge did not move by a number", snapped.delta);
+    }
+    let stops: Vec<f64> = snapped.hits.iter().map(|h| h.distance).collect();
+    if stops.is_empty() {
+        // No target ahead: exactly the fallback.
+        return if co.same(d, fallback) { Ok(()) } else { broken("a nudge with no target ahead did not move by the fallback", (d, fallback)) };
+    }
+    if !(d > co.tol(d, 0.0)) {
+        return broken("a nudge did not stop strictly ahead of where it began", d);
+    }
+    if !stops.iter().any(|s| co.same(*s, d)) {
+        return broken("a nudge did not stop where its target is", (d, stops));
+    }
+    if let crate::query::NudgeReach::Within(step) = reach
+        && d > step + co.tol(d, step)
+    {
+        return broken("a nudge went farther than its reach", (d, step));
+    }
+    Ok(())
+}
+
 /// An angle mark: the angle is the result's, another object has it (modulo the period), and the lattice has it.
 fn angle_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
     let Mark::Angle { angle, matched, step, .. } = m else { return Ok(()) };
@@ -605,6 +770,7 @@ impl Snapped {
         constraint(self, query)?;
         rounding(self, query)?;
         resized(self, query, targets)?;
+        nudge_stops(self, query)?;
         for m in &self.marks {
             line_mark(targets, query, self, m)?;
             size_mark(targets, query, self, m)?;

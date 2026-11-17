@@ -856,3 +856,149 @@ mod finer_rules {
         );
     }
 }
+
+mod line_reach_matching_and_nudge {
+    use craft_snap::{Direction, LineSpan, Matching, NudgeReach};
+
+    use super::*;
+
+    /// Settings with only the lines of boxes on, so that the subject is not pulled by a gap or a place.
+    fn lines_only() -> Settings {
+        let mut s = Settings::default();
+        for k in [Kind::Spacing, Kind::Corner, Kind::SideMiddle, Kind::Vertex, Kind::Midpoint, Kind::Nearest, Kind::Intersection, Kind::Size] {
+            let mut r = s.kinds.rule(k);
+            r.on = false;
+            s.kinds.set(k, r);
+        }
+        s
+    }
+
+    fn left_edge(r: &mut craft_snap::Snapped) -> &mut Mark {
+        r.marks.iter_mut().find(|m| matches!(m, Mark::Line { offset, .. } if (offset + 5.0).abs() < 1e-9)).unwrap()
+    }
+
+    fn reach(from: f64, to: f64) -> impl FnOnce(&mut craft_snap::Snapped) {
+        move |r| {
+            if let Mark::Line { segment, .. } = left_edge(r) {
+                *segment = Line::new(Point::new(-5.0, from), Point::new(-5.0, to));
+            }
+        }
+    }
+
+    #[test]
+    fn a_segment_reaches_every_target_on_its_line_or_the_one_nearest() {
+        // Two objects with their left sides on x = -5, one above the subject's row and one below, the subject between them.
+        let t = scene(&[(1, frame(0.0, -40.0, 10.0, 10.0, 0.0)), (2, frame(0.0, 40.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let want = "a line mark does not reach every target on its line";
+        let every = lines_only();
+        let q = query(box_subject(frame(0.0, 1.0, 10.0, 10.0, 0.0)), &every);
+        let r = run(&t, &q);
+        // Every: from the lower object's far end to the upper one's: -45 to 45.
+        assert!(
+            matches!(r.marks.iter().find(|m| matches!(m, Mark::Line { offset, .. } if (offset + 5.0).abs() < 1e-9)), Some(Mark::Line { segment, .. }) if segment.p0.y.min(segment.p1.y) == -45.0 && segment.p0.y.max(segment.p1.y) == 45.0),
+            "{r:?}"
+        );
+        assert_eq!(fires(&t, &q, reach(-4.0, 6.0)), want, "the subject's own extent only");
+        assert_eq!(fires(&t, &q, reach(-45.0, 6.0)), want, "one target and not the other");
+        assert_eq!(fires(&t, &q, reach(-4.0, 45.0)), want);
+        assert_eq!(fires(&t, &q, reach(-60.0, 60.0)), want, "farther than any target");
+        // Nearest: the subject's extent (-4 to 6) and the upper object's (35 to 45), which is 29 away against the lower one's 31.
+        let nearest = Settings { line_span: LineSpan::Nearest, ..lines_only() };
+        let q = query(box_subject(frame(0.0, 1.0, 10.0, 10.0, 0.0)), &nearest);
+        let r = run(&t, &q);
+        assert!(
+            matches!(r.marks.iter().find(|m| matches!(m, Mark::Line { offset, .. } if (offset + 5.0).abs() < 1e-9)), Some(Mark::Line { segment, .. }) if segment.p0.y.min(segment.p1.y) == -4.0 && segment.p0.y.max(segment.p1.y) == 45.0),
+            "{r:?}"
+        );
+        let want = "a line mark does not reach the nearest target on its line, or reaches another";
+        assert_eq!(fires(&t, &q, reach(-45.0, 6.0)), want, "the farther one");
+        assert_eq!(fires(&t, &q, reach(-45.0, 45.0)), want, "both");
+        assert_eq!(fires(&t, &q, reach(-4.0, 6.0)), want, "neither");
+    }
+
+    #[test]
+    fn a_mark_names_only_targets_a_side_of_the_subject_may_meet_under_the_matching_rule() {
+        // The subject's right side is on x = 5, the left side of the object beside it.
+        let t = scene(&[(1, frame(10.0, 40.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let same_side = Settings { matching: Matching::SameSide, ..Settings::default() };
+        let q = query(box_subject(frame(0.0, 0.0, 10.0, 10.0, 0.0)), &same_side);
+        let r = run(&t, &q);
+        assert!(
+            !r.marks.iter().any(|m| matches!(m, Mark::Line { offset, .. } if (offset - 5.0).abs() < 1e-9)),
+            "a high side does not meet a low one: {r:?}"
+        );
+        let invented = |r: &mut craft_snap::Snapped| {
+            r.marks.push(Mark::Line {
+                direction: Direction::new(0.0).unwrap(),
+                offset: 5.0,
+                segment: Line::new(Point::new(5.0, -5.0), Point::new(5.0, 45.0)),
+                kinds: vec![Kind::Edge],
+                first: Some(craft_snap::Id(1)),
+                count: 1,
+                hit: false,
+            });
+        };
+        assert_eq!(fires(&t, &q, invented), "a line mark names a target no side of the subject may meet under the matching rule");
+        // The same mark is true when any side may meet any.
+        let any = Settings::default();
+        let q = query(box_subject(frame(0.0, 0.0, 10.0, 10.0, 0.0)), &any);
+        let r = run(&t, &q);
+        assert!(r.marks.iter().any(|m| matches!(m, Mark::Line { offset, .. } if (offset - 5.0).abs() < 1e-9)), "{r:?}");
+    }
+
+    #[test]
+    fn a_nudge_stops_on_its_target_strictly_ahead_or_moves_by_the_fallback() {
+        let s = Settings::default();
+        let nudge =
+            |reach| Subject::Nudge { frame: frame(2.3, 1.0, 4.0, 2.0, 0.0), bounds: None, axis: Axis::X, forward: true, reach, fallback: 0.25 };
+        let both = |by: f64| {
+            move |r: &mut craft_snap::Snapped| {
+                r.delta.x += by;
+                if let Some(f) = r.frame.as_mut() {
+                    f.centre.x += by;
+                }
+            }
+        };
+        // No target ahead: the fallback to the bit.
+        let t = scene(&[], &[], &[]);
+        let q = query(nudge(NudgeReach::Anywhere), &s);
+        assert_eq!(fires(&t, &q, both(0.1)), "a nudge with no target ahead did not move by the fallback");
+        // A guide ahead at 9.55 (the box's low side is at 0.3, its high side at 4.3, centre 2.3): stops on it, not short of it, not past it.
+        let t = scene(&[], &[9.55], &[]);
+        let q = query(nudge(NudgeReach::Anywhere), &s);
+        assert_eq!(fires(&t, &q, both(0.1)), "a nudge did not stop where its target is");
+        assert_eq!(fires(&t, &q, both(-0.1)), "a nudge did not stop where its target is");
+        // Back to where it began: not strictly ahead.
+        assert_eq!(
+            fires(&t, &q, |r| {
+                r.delta.x = 0.0;
+                if let Some(f) = r.frame.as_mut() {
+                    f.centre.x = 2.3;
+                }
+                r.hits.iter_mut().for_each(|h| h.distance = 0.0);
+            }),
+            "a nudge did not stop strictly ahead of where it began"
+        );
+        // Off its axis.
+        assert_eq!(
+            fires(&t, &q, |r| {
+                r.delta.y = 0.5;
+                if let Some(f) = r.frame.as_mut() {
+                    f.centre.y += 0.5;
+                }
+            }),
+            "a nudge left its axis"
+        );
+        // Farther than its reach.
+        let t = scene(&[], &[4.55], &[]);
+        let q = query(nudge(NudgeReach::Within(5.0)), &s);
+        let far = |r: &mut craft_snap::Snapped| {
+            r.delta.x = 8.0;
+            if let Some(f) = r.frame.as_mut() {
+                f.centre.x = 10.3;
+            }
+            r.hits.iter_mut().for_each(|h| h.distance = 8.0);
+        };
+        assert_eq!(fires(&t, &q, far), "a nudge went farther than its reach");
+    }
+}
