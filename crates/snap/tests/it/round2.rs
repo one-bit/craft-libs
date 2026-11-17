@@ -482,3 +482,69 @@ mod angle_period {
         assert_eq!((c.hits.len(), c.work.truncated), (a.hits.len(), false));
     }
 }
+
+mod curve_solves {
+    use craft_snap::Cuts;
+    use kurbo::BezPath;
+
+    use super::*;
+
+    fn only_tangents() -> Settings {
+        let mut s = Settings::default();
+        for k in [Kind::Corner, Kind::SideMiddle, Kind::Vertex, Kind::Midpoint, Kind::Nearest, Kind::Intersection] {
+            let mut r = s.kinds.rule(k);
+            r.on = false;
+            s.kinds.set(k, r);
+        }
+        for k in [Kind::Tangent, Kind::Perpendicular] {
+            let mut r = s.kinds.rule(k);
+            r.on = true;
+            s.kinds.set(k, r);
+        }
+        s
+    }
+
+    fn with(path: BezPath) -> craft_snap::Targets {
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        b.object(craft_snap::Id(1), object(frame(0.0, 0.0, 10.0, 10.0, 0.0))).unwrap();
+        b.path(craft_snap::Id(1), path).unwrap();
+        b.build()
+    }
+
+    fn cusps(n: usize) -> BezPath {
+        let mut p = BezPath::new();
+        p.move_to((-5.0, -5.0));
+        for i in 0..n {
+            let s = if i % 2 == 0 { 1.0 } else { -1.0 };
+            p.curve_to((5.0 * s, 5.0), (-5.0 * s, 5.0), (5.0 * s, -5.0 + 0.001 * i as f64));
+        }
+        p
+    }
+
+    fn lines(n: usize) -> BezPath {
+        let mut p = BezPath::new();
+        p.move_to((-5.0, -5.0));
+        (0..n).for_each(|i| p.line_to((5.0 * if i % 2 == 0 { 1.0 } else { -1.0 }, -5.0 + 0.001 * i as f64)));
+        p
+    }
+
+    #[test]
+    fn a_curve_costs_what_its_solve_does_and_a_line_costs_one() {
+        let s = only_tangents();
+        let q = query(Subject::Point { at: Point::new(1.0, 1.0), base: Some(Point::new(20.0, 3.0)) }, &s);
+        // 4,096 cubics: each is thirty-two of the 16,384 pieces a query may read, so most are not solved, and the work says so.
+        let curved = run(&with(cusps(4_096)), &q);
+        assert!(curved.work.truncated && curved.work.cut.has(Cuts::PIECES), "{:?}", curved.work);
+        assert!(curved.work.pieces <= 16_384, "{}", curved.work.pieces);
+        // A few cubics fit, and are charged for what they cost: 32 each.
+        let few = run(&with(cusps(20)), &q);
+        assert!(!few.work.truncated, "{:?}", few.work);
+        assert!(few.work.pieces >= 20 * 32, "{}", few.work.pieces);
+        // 4,096 lines are charged a segment each, and the tangents of a line (none) are not asked for.
+        let flat = run(&with(lines(4_096)), &q);
+        assert!(!flat.work.truncated && flat.work.pieces < 16_384, "{:?}", flat.work);
+        for (t, r) in [(with(cusps(20)), &few), (with(lines(100)), &run(&with(lines(100)), &q))] {
+            r.check(&t, &q).unwrap();
+        }
+    }
+}

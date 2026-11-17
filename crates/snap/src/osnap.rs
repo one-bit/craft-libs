@@ -456,6 +456,20 @@ fn bisect(g: &dyn Fn(f64) -> f64, mut lo: f64, mut hi: f64, mut fa: f64) -> f64 
     0.5 * (lo + hi)
 }
 
+/// What a solve of the tangents or the perpendiculars of a curve costs, in the units a straight segment costs one of: a curve is sampled, then
+/// narrowed by bisection at each sign change, a few hundred evaluations where a line is two.
+pub const CURVE_SOLVE_COST: u64 = 32;
+
+/// How many segments a path has that the solvers read (at most [`MAX_SEGMENTS`]), and how many of them are curves.
+pub fn segment_counts(path: &BezPath) -> (u64, u64) {
+    let (mut all, mut curves) = (0u64, 0u64);
+    for seg in path.segments().take(MAX_SEGMENTS) {
+        all += 1;
+        curves += u64::from(!matches!(seg, PathSeg::Line(_)));
+    }
+    (all, curves)
+}
+
 /// The points of the path where the line from `base` touches it (the tangent through `base`). A straight segment has none.
 pub fn tangents(path: &BezPath, base: Point) -> Vec<Point> {
     solve(path, base, |r, d| r.cross(d), true)

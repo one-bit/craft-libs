@@ -151,10 +151,15 @@ fn osnaps(
             }
         }
         if let Some(b) = base {
-            if cx.rule(Kind::Tangent).on {
+            // Each solve is charged by the segments it reads: a curve costs what its sampling and bisection do, not what a line does.
+            let (segments, curves) = osnap::segment_counts(path);
+            let solve = curves.saturating_mul(osnap::CURVE_SOLVE_COST);
+            if cx.rule(Kind::Tangent).on && Work::charge(&mut cx.work.pieces, cap, solve, &mut cx.work.cut, &mut cx.work.truncated, Cuts::PIECES) {
                 osnap::tangents(path, b).into_iter().for_each(|p| offer(cx, Kind::Tangent, p));
             }
-            if cx.rule(Kind::Perpendicular).on {
+            if cx.rule(Kind::Perpendicular).on
+                && Work::charge(&mut cx.work.pieces, cap, solve.saturating_add(segments), &mut cx.work.cut, &mut cx.work.truncated, Cuts::PIECES)
+            {
                 osnap::perpendiculars(path, b).into_iter().for_each(|p| offer(cx, Kind::Perpendicular, p));
             }
         }
