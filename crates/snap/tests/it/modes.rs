@@ -201,6 +201,20 @@ mod size_in_view {
     }
 
     #[test]
+    fn a_view_scope_on_any_kind_but_size_looks_at_every_object() {
+        // An object far outside the view, with an edge level with the box's: an edge kind scoped to the view still finds it.
+        let t = scene(&[(1, frame(900.0, 3.0, 10.0, 6.0, 0.0))], &[], &[]);
+        let mut s = Settings::default();
+        s.kinds.set(Kind::Edge, KindRule { on: true, reach: Reach::Screen(6.0), priority: 3, scope: Scope::View });
+        let index = t.in_view(Rect::new(-50.0, -50.0, 50.0, 50.0));
+        assert_eq!(index.len(), 0);
+        let q = craft_snap::Query { view: Some(&index), ..query(box_subject(frame(0.0, 3.5, 10.0, 6.0, 0.0)), &s) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(r.hits.iter().any(|h| h.kind == Kind::Edge && h.id == Some(Id(1))), "{:?}", r.hits);
+    }
+
+    #[test]
     fn one_match_in_the_view_among_a_hundred_thousand_equal_lengths_outside_it_is_found_by_one_bisection() {
         let mut b = TargetsBuilder::new(Limits::default());
         for i in 0..100_000u64 {

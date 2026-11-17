@@ -54,7 +54,8 @@ impl Default for Budget {
 }
 
 /// The most bucket-grid windows one query gathers: five to find its candidates (round the subject, and a row along each of up to four
-/// directions) and the rest for checking a candidate again on the geometry it would land on.
+/// directions) and the rest for checking a candidate again on the geometry it would land on. The window past it is not gathered, and the work
+/// says so. It bounds the worst page; an ordinary query gathers fewer than a dozen.
 pub const MAX_GATHERS: u64 = 16;
 
 /// Which caps a query met.

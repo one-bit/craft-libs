@@ -56,7 +56,10 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
 
 A query gathers at most `MAX_GATHERS` (16) windows from the bucket grids: up to five to find its candidates (round the subject, and one row along
 each of up to four directions) and the rest to check a candidate again on the geometry it would land on. A window wider than 48 buckets is cut
-to the part round its middle, and says so.
+to the part round its middle, and says so. The number is a bound on the worst page, not a count of what a query does: an ordinary query gathers
+fewer than a dozen windows, a query that is refused gathers none, and one that would gather more is cut at the sixteenth and reports it (`Cuts`, `truncated`).
+Sixteen is kept on purpose: each re-check is one window of at most `window_visits` entries, so a query costs at most sixteen of those and no
+more, however many candidates the page offers.
 
 `Limits` (per target set): 200,000 objects, 100,000 of the app's own lines, 200,000 places, 10,000 paths, 2,000,000 path elements. A target past
 a limit is refused and counted in `BuildReport`. Vectors grow with `try_reserve`, so a build that cannot get the memory refuses and says so.
@@ -68,6 +71,21 @@ bounds its bucket numbers to ±2^31.
 
 Two settings are fixed for a target set once a query has used them: the sorted angles are made for the first `angle_period` asked for (a query
 with another gets no rotation match and says so), and lines are grouped by the `Coincide` the builder was given in `Limits`.
+
+## What it does not do
+
+- **A resize has no equal-gap candidates.** `Subject::Edges` snaps to lines, places and sizes, not to a gap that repeats a neighbour's; a move does
+  both.
+- **Places do not pull under an axis lock or a ray.** `Constraint::Axis` and `Constraint::Ray` solve against lines only; the places are not tried
+  along the line.
+- **A scope that is not `All` is read by `Kind::Size` only.** `KindRule::scope` on any other kind looks at every object.
+- **Only the nearest line of each kind and side is a candidate.** If a verification (a resize that would leave no box, a row that changed) drops it,
+  the next nearest line of the same kind is not tried. The result always satisfies `Snapped::check`; it is not always the best one there was.
+- **Row neighbours are read from a strip.** An equal gap is searched among the objects that meet the strip `spacing_reach` long along the row, and
+  only the objects that overlap the subject across it by more than the same-place rule (or, linked, are chained to those that do).
+- **Far from the origin a place is coarser.** The same-place rule grows by a few units in the last place of the largest coordinate in the query, so a
+  result is not called off its line for the rounding of its own coordinates; two candidates that are closer than that at 1e11 are told apart by
+  the rule, not by their distance.
 
 ## Measured costs
 
@@ -134,6 +152,13 @@ the directions and the pairing of up to four of them; the constraint solver; the
   a candidate that does not hold on the final extents is dropped, so it only loses snaps; the named case of a turned box dragged by a side onto a
   guide fails it.
 - Counted cost tests for each hostile input: 100,000 objects (also at 100,000 angles), a stack of 2,500 boxes, a row of 10,000 equal gaps, far
-  coordinates to 1e11, nearly parallel directions, 100,000 lines at one place, one match in view among 100,000 outside it, a nudge with nothing
-  ahead and one whose next target is 1e9 away, hostile angles and steps, and every counter against its cap.
+  coordinates to 1e11, nearly parallel directions, 100,000 lines at one place, 100,000 distinct lines in one reach, 100,000 equal widths, one match
+  in view among 100,000 outside it, a nudge with nothing ahead and one whose next target is 1e9 away, hostile angles and steps, degenerate boxes
+  and rows (no width, touching, overlapping, a box wider than its room, a resize that would leave no box), every shortcut checked against the
+  inputs it must still catch, and every budget field at nothing and at one. The numbers are pinned near the measured work. The `#[ignore]`d
+  `timed` tests time each case beside a yardstick, back to back (`cargo test -p craft-snap --test it --release -- --ignored timed`).
+- Two properties over random scenes: a scene turned as a whole gives the same hits and marks and the move turned by the same angle, and a scene
+  moved to 1e3, 1e6, 1e9 and 1e11 gives the same hits and marks (to 1e9; at 1e11 the result is checked, for candidates closer than the numbers there
+  can tell apart are told apart by the noise). The seed is fixed; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and a find is a
+  case to read.
 - Order, mirror, quarter-turn, angle-0 and zoom-boundary checks, a scene moved to 1e6, 1e9 and 1e11 (the same hits and marks), and the index against a scan of every line (anywhere on the page and within a reach across).

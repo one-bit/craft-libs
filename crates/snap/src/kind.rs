@@ -140,7 +140,7 @@ impl Reach {
 }
 
 /// Which objects a kind looks at: all of them (the default), or those whose bounds meet the query's view. Only `Kind::Size` reads it in this
-/// version.
+/// version: a rule of any other kind with `Scope::View` looks at every object, as with `Scope::All`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     All,
