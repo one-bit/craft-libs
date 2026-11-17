@@ -923,9 +923,10 @@ mod tests {
         let found = g.gather(&Rect::new(0.0, 2.0, 81.9, 3.9), 1000, 100_000);
         assert_eq!(found.items.len(), 41);
         assert_eq!(found.visited, 41, "no bucket outside the window is looked in");
+        assert_eq!(found.examined, 41, "and each box in them once");
         assert!(!found.cut);
         // The same for a thin column.
         let found = g.gather(&Rect::new(40.0, 0.0, 41.9, 5.9), 1000, 100_000);
-        assert_eq!((found.items.len(), found.visited), (3, 3));
+        assert_eq!((found.items.len(), found.visited, found.examined), (3, 3, 3));
     }
 }
