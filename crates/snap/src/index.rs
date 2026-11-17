@@ -805,22 +805,22 @@ mod tests {
 
     #[test]
     fn a_grid_gives_the_boxes_nearest_the_middle_of_the_window_first() {
-        // One box on each side of the window's middle at 0, each a different distance from it.
+        // The window's middle is at (5, 7): one box on each side of it, each a different distance away, and one on it.
         let items = vec![
-            cell(1, 3.0, -0.5, 1.0, 1.0),
-            cell(2, -6.0, -0.5, 1.0, 1.0),
-            cell(3, -0.5, 4.0, 1.0, 1.0),
-            cell(4, -0.5, -8.0, 1.0, 1.0),
-            cell(5, -0.5, -0.5, 1.0, 1.0),
+            cell(1, 8.0, 6.5, 1.0, 1.0),
+            cell(2, -1.0, 6.5, 1.0, 1.0),
+            cell(3, 4.5, 11.0, 1.0, 1.0),
+            cell(4, 4.5, -1.0, 1.0, 1.0),
+            cell(5, 4.5, 6.5, 1.0, 1.0),
         ];
         let g = Grid::build(items);
-        let found = g.gather(&Rect::new(-10.0, -10.0, 10.0, 10.0), 10, 1000);
+        let found = g.gather(&Rect::new(-5.0, -3.0, 15.0, 17.0), 10, 1000);
         let ids: Vec<u64> = found.items.iter().map(|c| c.id.0).collect();
         assert_eq!(ids, vec![5, 1, 3, 2, 4]);
         assert!(!found.cut);
         // With room for fewer than there are, the cut is said, and not before.
-        assert!(g.gather(&Rect::new(-10.0, -10.0, 10.0, 10.0), 4, 1000).cut);
-        assert!(!g.gather(&Rect::new(-10.0, -10.0, 10.0, 10.0), 5, 1000).cut);
+        assert!(g.gather(&Rect::new(-5.0, -3.0, 15.0, 17.0), 4, 1000).cut);
+        assert!(!g.gather(&Rect::new(-5.0, -3.0, 15.0, 17.0), 5, 1000).cut);
     }
 
     #[test]

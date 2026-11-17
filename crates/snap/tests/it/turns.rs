@@ -163,6 +163,19 @@ fn a_turn_finds_the_nearest_angle_among_many_and_not_only_the_first_and_last() {
     }
 }
 
+#[test]
+fn a_match_many_turns_away_lands_on_the_angle_as_many_turns_away() {
+    let t = turned_scene(&[100f64.to_radians()]);
+    let s = Settings::default();
+    for turns in [-3.0f64, 1.0, 3.0, 7.0] {
+        let raw = 100f64.to_radians() + 0.01 + turns * std::f64::consts::TAU;
+        let q = query(rotate(raw, 150.0, None), &s);
+        let r = run(&t, &q);
+        assert!((r.angle.unwrap() - (100f64.to_radians() + turns * std::f64::consts::TAU)).abs() < 1e-9, "{turns}: {:?}", r.angle);
+        r.check(&t, &q).unwrap();
+    }
+}
+
 mod nudges {
     use craft_snap::{Axis, Kind, Mark, Settings, Subject};
     use kurbo::Point;

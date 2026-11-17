@@ -403,4 +403,33 @@ mod tests {
         let ok = TurnedBox { angle: 999_999_999.0 * FRAC_PI_2, ..b };
         assert!(ok.quarter(1.0).is_some());
     }
+
+    #[test]
+    fn the_anchors_of_the_other_end_swap_low_and_high_and_keep_the_middle() {
+        let a = Anchors { min: true, mid: false, max: false };
+        assert_eq!(a.reversed(), Anchors { min: false, mid: false, max: true });
+        let b = Anchors { min: false, mid: true, max: true };
+        assert_eq!(b.reversed(), Anchors { min: true, mid: true, max: false });
+        assert_eq!(a.reversed().reversed(), a);
+    }
+
+    #[test]
+    fn a_unit_vector_is_exact_within_a_trillionth_of_a_quarter_turn_and_not_beyond_it() {
+        assert_eq!(unit(FRAC_PI_2 + 5.0e-13), Vec2::new(0.0, 1.0));
+        assert_eq!(unit(PI - 5.0e-13), Vec2::new(-1.0, 0.0));
+        assert_eq!(unit(-FRAC_PI_2), Vec2::new(0.0, -1.0));
+        assert_ne!(unit(FRAC_PI_2 + 2.0e-12).x, 0.0, "two trillionths is past the tolerance");
+        // A count of quarter turns of a billion is no longer exact.
+        assert_ne!(unit(1.0e9 * FRAC_PI_2).y, 0.0);
+    }
+
+    #[test]
+    fn a_box_is_a_quarter_turn_within_the_tolerance_in_radians_and_not_beyond_it() {
+        let b = TurnedBox { centre: Point::ORIGIN, size: Size::new(1.0, 1.0), angle: FRAC_PI_2 + 0.9e-9 };
+        assert_eq!(b.quarter(1.0e-9), Some(1));
+        let b = TurnedBox { angle: FRAC_PI_2 + 1.5e-9, ..b };
+        assert_eq!(b.quarter(1.0e-9), None);
+        let b = TurnedBox { angle: -FRAC_PI_2 - 0.9e-9, ..b };
+        assert_eq!(b.quarter(1.0e-9), Some(3));
+    }
 }

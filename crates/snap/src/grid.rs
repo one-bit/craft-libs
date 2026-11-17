@@ -76,4 +76,10 @@ mod tests {
             assert!((one_two_five(min) - want).abs() < 1e-12, "{min}: {}", one_two_five(min));
         }
     }
+
+    #[test]
+    fn a_pitch_stops_doubling_before_it_overflows() {
+        assert_eq!(doubling(1.0e308, 1.7e308, 1.0), Some(1.0e308));
+        assert_eq!(doubling(1.0e300, f64::MAX, 1.0).map(f64::is_finite), Some(true));
+    }
 }
