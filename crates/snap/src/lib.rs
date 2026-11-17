@@ -4,6 +4,7 @@
 //! Snapping and smart guides for any editor that drags things on a canvas.
 
 mod align;
+mod angle;
 pub mod budget;
 mod check;
 mod ctx;

@@ -225,6 +225,32 @@ fn hits_have_marks(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
     Ok(())
 }
 
+/// An angle mark: the angle is the result's, another object has it (modulo the period), and the lattice has it.
+fn angle_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
+    let Mark::Angle { angle, matched, step, .. } = m else { return Ok(()) };
+    let (co, p) = (&q.settings.coincide, q.settings.angle_period);
+    if snapped.angle.is_none_or(|a| a.to_bits() != angle.to_bits()) {
+        return broken("an angle mark is not the final angle", m);
+    }
+    if let Some(id) = matched {
+        let ok = t.objects.iter().any(|o| o.id == *id && o.parts.angle && crate::angle::wrap(o.angle.unwrap_or(o.frame.angle) - angle, p).abs() <= co.angle);
+        if !ok {
+            return broken("an angle mark names an object that does not have the angle", m);
+        }
+    }
+    if let Some(st) = step {
+        let zero = match (q.subject, q.constraint) {
+            (_, Constraint::Angles { zero, .. }) => zero,
+            (Subject::Rotate { step: Some((_, z)), .. }, _) => z,
+            _ => return broken("an angle mark has a step but the query has none", m),
+        };
+        if !crate::angle::on_lattice(*angle, *st, zero, co.angle) {
+            return broken("an angle mark's angle is not a whole number of steps", m);
+        }
+    }
+    Ok(())
+}
+
 /// A size mark: the length is the subject's final own width or height, its side is that side of the final box, and the matched object has a
 /// side of that length.
 fn size_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
@@ -300,6 +326,7 @@ impl Snapped {
         for m in &self.marks {
             line_mark(targets, query, self, m)?;
             size_mark(targets, query, self, m)?;
+            angle_mark(targets, query, self, m)?;
         }
         if self.work.marks_dropped != 0 {
             return broken("marks were dropped", self.work.marks_dropped);

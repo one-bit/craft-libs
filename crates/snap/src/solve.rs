@@ -20,6 +20,8 @@ pub(crate) enum HitRec {
     Line(Cand),
     /// A width or height of the subject equal to another object's.
     Size(Cand),
+    /// An angle equal to another object's, or on a lattice of angles.
+    Angle(crate::angle::AngleHit),
 }
 
 /// Where the subject lands and what it snapped to.
@@ -79,7 +81,8 @@ pub fn snap(targets: &Targets, query: &Query<'_>, detail: &mut dyn Detail) -> Sn
         Subject::Point { at, base } => moves::solve_point(&mut cx, detail, at, base),
         Subject::Box { frame, u, v, own } => moves::solve_box(&mut cx, detail, frame, u, v, own),
         Subject::Edges { frame, moving } => resize::solve_edges(&mut cx, detail, frame, moving),
-        Subject::Rotate { .. } | Subject::Nudge { .. } => Solution::new(),
+        Subject::Rotate { angle, radius, step, .. } => crate::angle::solve_rotate(&mut cx, angle, radius, step),
+        Subject::Nudge { .. } => Solution::new(),
     };
     let marks = marks::derive(&mut cx, &sol);
     finish(cx.work, sol, marks)
@@ -93,6 +96,7 @@ fn finish(mut work: Work, sol: Solution, marks: Vec<crate::result::Mark>) -> Sna
 
 fn hit_of(h: &HitRec) -> Hit {
     match h {
+        HitRec::Angle(a) => Hit { kind: a.kind, id: a.id, direction: None, side: None, number: None, distance: a.delta.abs() },
         HitRec::Size(c) => Hit { kind: c.kind, id: c.id, direction: None, side: Some((c.side, c.own)), number: None, distance: c.t },
         HitRec::Line(c) => {
             Hit { kind: c.kind, id: c.id, direction: Direction::new(c.angle), side: Some((c.side, c.own)), number: None, distance: c.t }
