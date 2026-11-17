@@ -15,7 +15,7 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
   along each shape's own axes as well as the page's. A shape a whole number of quarter turns from the page is the page's own case, stored once.
 - **Policy is data.** `Settings` holds, per kind, whether it is on, how far it pulls (`Reach::Screen`, `Document` or `Any`), its priority and
   its scope; the tie rule (`Choose::Nearest` or `Ranked`); how places compete with lines; which sides meet which lines (`Matching::AnyToAny`,
-  `LikeToLike`, `SameSide`); the families of lines; spacing rows and gaps; size axes; the angle period; how far a line mark runs
+  `LikeToLike`, `SameSide`); the families of lines; spacing rows (`Band`, or `Linked`: a staircase of objects is a row) and gaps; size axes; the angle period; how far a line mark runs
   (`LineSpan::Every` or `Nearest`); and what counts as the same place (`Coincide`).
 - **Constraints and rounding are solved inside the snap.** An axis lock, a ray, a kept aspect ratio (from a corner or a side handle), sides that
   move together, a hard lattice of angles, and a rounding lattice all limit the candidates, so the result satisfies them. A candidate that a
@@ -126,9 +126,11 @@ the directions and the pairing of up to four of them; the constraint solver; the
 ## Tests
 
 - `Snapped::check` is asserted by property tests over random scenes, settings, zooms, constraints and roundings, for every subject, turned and
-  not; the planted mutants that must fail it (marks before the constraint, marks before the rounding, a lock after the snap, a mark for a target
-  that is not there, a resize along the page axis) do.
+  not. Five planted mutants fail it (marks before the constraint, marks before the rounding, a lock after the snap, a mark for a target that is
+  not there, a turned resize rebuilt along the page axes). A sixth, candidates of a turned resize solved with the wrong travel, passes it, because
+  a candidate that does not hold on the final extents is dropped, so it only loses snaps; the named case of a turned box dragged by a side onto a
+  guide fails it.
 - Counted cost tests for each hostile input: 100,000 objects (also at 100,000 angles), a stack of 2,500 boxes, a row of 10,000 equal gaps, far
   coordinates to 1e11, nearly parallel directions, 100,000 lines at one place, one match in view among 100,000 outside it, a nudge with nothing
   ahead and one whose next target is 1e9 away, hostile angles and steps, and every counter against its cap.
-- Order, mirror, quarter-turn, angle-0, zoom-boundary, translation and index-against-scan properties.
+- Order, mirror, quarter-turn, angle-0 and zoom-boundary checks, a scene moved to 1e6, 1e9 and 1e11 (the same hits and marks), and the index against a scan of every line (anywhere on the page and within a reach across).

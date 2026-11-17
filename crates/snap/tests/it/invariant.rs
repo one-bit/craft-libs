@@ -26,6 +26,7 @@ fn settings() -> impl Strategy<Value = Settings> {
             },
             frames: Frames { page: page || !own, own },
             line_span: if nearest { craft_snap::LineSpan::Nearest } else { craft_snap::LineSpan::Every },
+            spacing_row: if nearest { craft_snap::SpacingRow::Linked } else { craft_snap::SpacingRow::Band },
             ..Settings::default()
         },
     )

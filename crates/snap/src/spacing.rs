@@ -19,7 +19,7 @@ use crate::ctx::{Cand, Ctx, Probe};
 use crate::frame::{Direction, Id, OwnOrBounds, Side, TurnedBox};
 use crate::kind::Kind;
 use crate::result::Mark;
-use crate::settings::SpacingGaps;
+use crate::settings::{SpacingGaps, SpacingRow};
 use crate::solve::{HitRec, Solution};
 
 /// One object of a row: its extent along the row's direction and across it.
@@ -61,7 +61,9 @@ pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bo
     let ((lo, hi), (c0, c1)) = (extent(subject, n, cx.o), extent(subject, t, cx.o));
     let r = cx.s.spacing_reach;
     let reach = (r.times * (hi - lo)).max(r.at_least);
-    let corners = [(lo - reach, c0), (lo - reach, c1), (hi + reach, c0), (hi + reach, c1)].map(|(a, c)| n * a + t * c);
+    // A linked row follows a staircase out across the subject's strip, so its window is as wide across as it is along.
+    let (w0, w1) = if cx.s.spacing_row == SpacingRow::Linked { (c0 - reach, c1 + reach) } else { (c0, c1) };
+    let corners = [(lo - reach, w0), (lo - reach, w1), (hi + reach, w0), (hi + reach, w1)].map(|(a, c)| n * a + t * c);
     let window = kurbo::Rect::new(
         corners.iter().map(|p| p.x).fold(f64::INFINITY, f64::min),
         corners.iter().map(|p| p.y).fold(f64::INFINITY, f64::min),
@@ -96,9 +98,40 @@ pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bo
             };
             RowObj { id: o.id, lo: l, hi: h, c0: a, c1: b }
         })
-        .filter(|o| o.c0 < c1 && c0 < o.c1)
-        .collect();
+        .collect::<Vec<RowObj>>();
+    let objs = match cx.s.spacing_row {
+        SpacingRow::Band => objs.into_iter().filter(|o| o.c0 < c1 && c0 < o.c1).collect(),
+        SpacingRow::Linked => linked(cx, objs, (lo, hi), (c0, c1)),
+    };
     Row { objs, lo, hi, c0, c1 }
+}
+
+/// A linked row: from each neighbour outward, the next object that overlaps the previous one across, so a staircase of objects is a row.
+fn linked(cx: &Ctx<'_>, objs: Vec<RowObj>, (lo, hi): (f64, f64), across: (f64, f64)) -> Vec<RowObj> {
+    let co = cx.co;
+    let (mut before, mut after): (Vec<RowObj>, Vec<RowObj>) = (Vec::new(), Vec::new());
+    for o in objs {
+        if o.hi <= lo + co.tol(o.hi, lo) {
+            before.push(o);
+        } else if o.lo >= hi - co.tol(o.lo, hi) {
+            after.push(o);
+        }
+    }
+    // Nearest the subject first on each side.
+    before.sort_by(|a, b| b.hi.total_cmp(&a.hi).then(a.id.cmp(&b.id)));
+    after.sort_by(|a, b| a.lo.total_cmp(&b.lo).then(a.id.cmp(&b.id)));
+    let overlaps = |a: (f64, f64), o: &RowObj| o.c0 < a.1 && a.0 < o.c1;
+    let mut out = Vec::new();
+    for side in [before, after] {
+        let mut current = across;
+        for o in side {
+            if overlaps(current, &o) {
+                current = (o.c0, o.c1);
+                out.push(o);
+            }
+        }
+    }
+    out
 }
 
 /// The objects wholly before and wholly after the subject, and the row's stationary gaps (each with its two objects).

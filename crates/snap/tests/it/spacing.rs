@@ -61,3 +61,26 @@ fn a_turned_row_is_marked_along_its_own_direction() {
     r.check(&t, &q).unwrap();
     assert!(r.marks.iter().any(|m| matches!(m, Mark::Gap { direction, .. } if (direction.angle() - a).abs() < 1e-9)), "{:?}", r.marks);
 }
+
+#[test]
+fn a_staircase_is_a_row_when_linked_and_not_when_banded() {
+    use craft_snap::SpacingRow;
+    // Two boxes before the subject: the near one overlaps the subject across, the far one overlaps only the near one, and the gap between them is 7.
+    let t = scene(&[(1, frame(22.0, 10.0, 10.0, 10.0, 0.0)), (2, frame(5.0, 17.0, 10.0, 10.0, 0.0))], &[], &[]);
+    let landing = |row: SpacingRow| {
+        let mut s = Settings { spacing_row: row, ..wide() };
+        for k in [Kind::Corner, Kind::SideMiddle, Kind::Edge, Kind::Centre] {
+            s.kinds.set(k, craft_snap::KindRule { on: false, reach: craft_snap::Reach::Screen(6.0), priority: 1, scope: craft_snap::Scope::All });
+        }
+        // The near box ends at 27; repeating the gap of 7 puts the subject's low side at 34. It is at 32.
+        let q = query(box_subject(frame(37.0, 5.0, 10.0, 10.0, 0.0)), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        r
+    };
+    let banded = landing(SpacingRow::Band);
+    assert_eq!(banded.delta.x, 0.0, "{:?}", banded.hits);
+    let linked = landing(SpacingRow::Linked);
+    assert!((linked.delta.x - 2.0).abs() < 1e-9 && linked.hits.iter().any(|h| h.kind == Kind::Spacing), "{:?} {:?}", linked.delta, linked.hits);
+    assert!(linked.marks.iter().any(|m| matches!(m, Mark::Gap { value, hit: true, .. } if (value - 7.0).abs() < 1e-9)), "{:?}", linked.marks);
+}
