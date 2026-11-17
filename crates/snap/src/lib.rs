@@ -17,6 +17,7 @@ mod marks;
 mod moves;
 mod nudge;
 pub mod osnap;
+mod places;
 pub mod query;
 mod resize;
 pub mod result;

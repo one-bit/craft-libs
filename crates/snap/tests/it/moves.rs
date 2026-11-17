@@ -25,9 +25,14 @@ fn a_box_near_a_guide_lands_on_it_and_the_mark_says_so() {
 }
 
 #[test]
-fn two_objects_at_a_corner_fix_both_degrees() {
+fn two_lines_in_different_directions_fix_both_degrees() {
     let t = scene(&[(1, frame(100.0, 100.0, 20.0, 20.0, 0.0))], &[], &[]);
-    let s = Settings::default();
+    let mut s = Settings::default();
+    for k in [Kind::Corner, Kind::SideMiddle] {
+        let mut rule = s.kinds.rule(k);
+        rule.on = false;
+        s.kinds.set(k, rule);
+    }
     let f = frame(113.0, 107.0, 20.0, 20.0, 0.0);
     let q = query(box_subject(f), &s);
     let r = run(&t, &q);
@@ -94,4 +99,42 @@ fn a_point_snaps_to_lines_in_both_page_directions() {
     assert_eq!(r.point, Some(Point::new(10.0, 20.0)));
     r.check(&t, &q).unwrap();
     let _ = Anchors::ALL;
+}
+
+mod places {
+    use craft_snap::{Anchors, Axis, Id, Kind, Limits, Mark, Places, Settings, Subject, TargetsBuilder};
+    use kurbo::Point;
+
+    use crate::common::*;
+
+    #[test]
+    fn a_box_corner_near_another_boxs_corner_lands_on_it_and_the_place_is_marked() {
+        let mut b = TargetsBuilder::new(Limits::default());
+        b.object(Id(1), object(frame(100.0, 100.0, 20.0, 20.0, 0.0))).unwrap();
+        let t = b.build();
+        let s = Settings { places: Places::First, ..Settings::default() };
+        // The subject's min corner is at (112, 112): 2 from the other box's max corner (110, 110) on each axis.
+        let f = frame(122.0, 122.0, 20.0, 20.0, 0.0);
+        let q = query(box_subject(f), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert_eq!(r.frame.unwrap().centre, Point::new(120.0, 120.0));
+        assert!(r.hits.iter().any(|h| h.kind == Kind::Corner));
+        assert!(r.marks.iter().any(|m| matches!(m, Mark::Place { kind: Kind::Corner, hit: true, .. })), "{:?}", r.marks);
+    }
+
+    #[test]
+    fn the_apps_own_place_pulls_a_point_and_beats_a_line_under_first() {
+        let mut b = TargetsBuilder::new(Limits::default());
+        b.point(Some(Id(9)), Point::new(50.0, 50.0), Kind::Point(0), 3).unwrap();
+        b.line(None, Axis::X, 52.0, None, Kind::Guide).unwrap();
+        let t = b.build();
+        let s = Settings { places: Places::First, ..Settings::default() };
+        let q = query(Subject::Point { at: Point::new(51.0, 51.5), base: None }, &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert_eq!(r.point, Some(Point::new(50.0, 50.0)));
+        assert_eq!(r.hits.first().and_then(|h| h.number), Some(3));
+        let _ = Anchors::ALL;
+    }
 }

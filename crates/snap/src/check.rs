@@ -350,6 +350,37 @@ fn resized(snapped: &Snapped, q: &Query<'_>, t: &Targets) -> Result<(), Broken> 
     Ok(())
 }
 
+/// A place mark: a place of the final geometry is on it, and a place of the kinds the set holds itself is in the set.
+fn place_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
+    let Mark::Place { at, kind, id, number, .. } = m else { return Ok(()) };
+    let co = &q.settings.coincide;
+    let finals: Vec<Point> = match (q.subject, snapped.point, snapped.frame) {
+        (Subject::Point { .. }, Some(p), _) => vec![p],
+        (Subject::Box { own, .. }, _, Some(f)) => crate::places::box_places(&f).into_iter().chain(own.iter().map(|p| *p + snapped.delta)).collect(),
+        _ => Vec::new(),
+    };
+    if !finals.iter().any(|p| co.same_point(*p, *at)) {
+        return broken("a place mark is not on a place of the final geometry", m);
+    }
+    let exists = match kind {
+        Kind::Point(_) => t.points.iter().any(|p| p.kind == *kind && p.id == *id && Some(p.number) == *number && co.same_point(p.at, *at)),
+        Kind::Corner | Kind::SideMiddle => t.objects.iter().any(|o| {
+            let c = o.frame.corners();
+            let places: Vec<Point> = if *kind == Kind::Corner {
+                c.to_vec()
+            } else {
+                vec![c[0].midpoint(c[1]), c[1].midpoint(c[2]), c[2].midpoint(c[3]), c[3].midpoint(c[0])]
+            };
+            Some(o.id) == *id && places.iter().any(|p| co.same_point(*p, *at))
+        }),
+        _ => true,
+    };
+    if !exists {
+        return broken("a place mark names a place that is not in the set", m);
+    }
+    Ok(())
+}
+
 /// A gap mark: its segment runs along its direction, its length is its value, and its ends are on facing sides of objects of the set (or of the
 /// subject), which overlap across the segment. Gaps of one chain have one value.
 fn gap_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
@@ -402,6 +433,7 @@ impl Snapped {
             size_mark(targets, query, self, m)?;
             angle_mark(targets, query, self, m)?;
             gap_mark(targets, query, self, m)?;
+            place_mark(targets, query, self, m)?;
         }
         if self.work.marks_dropped != 0 {
             return broken("marks were dropped", self.work.marks_dropped);

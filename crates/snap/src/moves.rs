@@ -15,8 +15,9 @@ use crate::align::{Free, probe_cands};
 use crate::budget::{Cuts, Work};
 use crate::ctx::{Cand, Ctx, Probe, ProbeSide, probes, top};
 use crate::frame::{Anchors, OwnOrBounds, Side, TurnedBox, to_page_axes};
+use crate::places::{PlaceCand, box_places, solve_places};
 use crate::query::{Constraint, Detail, Rounding};
-use crate::settings::Choose;
+use crate::settings::{Choose, Places};
 use crate::solve::{HitRec, RoundOn, Solution, round_k};
 use crate::targets::side_lines;
 
@@ -207,44 +208,96 @@ fn solve_probes(cx: &mut Ctx<'_>, ps: &[Probe], fr: &Freedom, spaced: Option<&Tu
     choose(cx, list, fr, refp, minp)
 }
 
+/// What a move settled on: lines, or a place.
+enum Chosen {
+    Lines(Vec2, Combo),
+    Place(Vec2, PlaceCand),
+}
+
+/// Lines and a place compete under the settings. A place is taken only if the rounding leaves the subject on it.
+fn decide(cx: &Ctx<'_>, lines: Option<(Vec2, Combo)>, place: Option<PlaceCand>, fr: &Freedom, refp: Point, minp: Point) -> Option<Chosen> {
+    let place = place.and_then(|p| {
+        let k = round_k(&cx.q.rounding, refp, minp, p.k(), fr.on);
+        cx.co.same_point(p.q + k, p.g.at).then_some((k, p))
+    });
+    match (lines, place) {
+        (l, None) => l.map(|(k, c)| Chosen::Lines(k, c)),
+        (None, Some((k, p))) => Some(Chosen::Place(k, p)),
+        (Some((kl, c)), Some((kp, p))) => {
+            let lines_win = match cx.s.places {
+                Places::First => false,
+                Places::Compete { bias } => {
+                    c.degrees == 2
+                        && match cx.s.choose {
+                            Choose::Nearest => c.len() + bias * p.reach < p.dist,
+                            Choose::Ranked => c.worst_prio() < p.prio,
+                        }
+                }
+            };
+            Some(if lines_win { Chosen::Lines(kl, c) } else { Chosen::Place(kp, p) })
+        }
+    }
+}
+
+/// Settles a move: its lines, its places, and the rounding of what it falls back to.
+fn settle(
+    cx: &mut Ctx<'_>,
+    detail: &mut dyn Detail,
+    ps: &[Probe],
+    fr: &Freedom,
+    spaced: Option<&TurnedBox>,
+    places: (Vec<Point>, Option<Point>),
+    refp: Point,
+    minp: Point,
+) -> (Vec2, Vec<HitRec>) {
+    let lines = solve_probes(cx, ps, fr, spaced, refp, minp);
+    let place = if matches!(fr.free, Free::Normal) { solve_places(cx, detail, &places.0, places.1) } else { None };
+    match decide(cx, lines, place, fr, refp, minp) {
+        Some(Chosen::Lines(k, c)) => (k, std::iter::once(c.a).chain(c.b).map(HitRec::Line).collect()),
+        Some(Chosen::Place(k, p)) => (k, vec![HitRec::Place(p)]),
+        None => (round_k(&cx.q.rounding, refp, minp, fr.base, fr.on), Vec::new()),
+    }
+}
+
 /// Moves a point.
-pub(crate) fn solve_point(cx: &mut Ctx<'_>, _detail: &mut dyn Detail, at: Point, _base: Option<Point>) -> Solution {
+pub(crate) fn solve_point(cx: &mut Ctx<'_>, detail: &mut dyn Detail, at: Point, base: Option<Point>) -> Solution {
     let rel = (at - cx.o).to_point();
     cx.region = kurbo::Rect::from_points(rel, rel);
     let fr = freedom(&cx.q.constraint, at);
-    let moved = at + fr.base;
-    let ps = point_probes(cx, moved);
+    let ps = point_probes(cx, at + fr.base);
+    let (k, hits) = settle(cx, detail, &ps, &fr, None, (vec![at], base), at, at);
     let mut sol = Solution::new();
-    let mut k = fr.base;
-    if let Some((kk, combo)) = solve_probes(cx, &ps, &fr, None, at, at) {
-        k = kk;
-        sol.hits.push(HitRec::Line(combo.a));
-        sol.hits.extend(combo.b.map(HitRec::Line));
-    } else {
-        k = round_k(&cx.q.rounding, at, at, k, fr.on);
-    }
     sol.k = k;
+    sol.hits = hits;
     sol.point = Some(at + k);
     sol
 }
 
+/// The places of a box that are pulled: its nine, and the places of the objects that move with it (at most `own`).
+fn subject_places(cx: &mut Ctx<'_>, frame: &TurnedBox, own: &[Point]) -> Vec<Point> {
+    let mut out = box_places(frame);
+    let cap = u64::from(cx.budget().own);
+    for p in own.iter().filter(|p| p.is_finite()) {
+        if !Work::charge(&mut cx.work.own, cap, 1, &mut cx.work.cut, &mut cx.work.truncated, Cuts::OWN) {
+            break;
+        }
+        out.push(*p);
+    }
+    out
+}
+
 /// Moves a box.
-pub(crate) fn solve_box(cx: &mut Ctx<'_>, _detail: &mut dyn Detail, frame: TurnedBox, u: Anchors, v: Anchors, _own: &[Point]) -> Solution {
+pub(crate) fn solve_box(cx: &mut Ctx<'_>, detail: &mut dyn Detail, frame: TurnedBox, u: Anchors, v: Anchors, own: &[Point]) -> Solution {
     let fr = freedom(&cx.q.constraint, frame.centre);
     let moved = TurnedBox { centre: frame.centre + fr.base, ..frame };
     cx.region = cx.t.rel_bounds(&moved);
     let ps = box_probes(cx, &moved, u, v);
     let minp = Point::new(frame.bounds().x0, frame.bounds().y0);
+    let places = subject_places(cx, &moved, own);
+    let (k, hits) = settle(cx, detail, &ps, &fr, Some(&moved), (places, None), frame.centre, minp);
     let mut sol = Solution::new();
-    let mut k = fr.base;
-    if let Some((kk, combo)) = solve_probes(cx, &ps, &fr, Some(&moved), frame.centre, minp) {
-        k = kk;
-        sol.hits.push(HitRec::Line(combo.a));
-        sol.hits.extend(combo.b.map(HitRec::Line));
-    } else {
-        k = round_k(&cx.q.rounding, frame.centre, minp, k, fr.on);
-    }
     sol.k = k;
+    sol.hits = hits;
     sol.frame = Some(TurnedBox { centre: frame.centre + k, ..frame });
     sol
 }

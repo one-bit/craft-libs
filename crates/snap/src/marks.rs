@@ -39,7 +39,7 @@ fn final_probes(cx: &Ctx<'_>, sol: &Solution) -> Vec<Probe> {
 fn is_hit(sol: &Solution, probe: &Probe, c: f64, cx: &Ctx<'_>) -> bool {
     sol.hits.iter().any(|h| match h {
         HitRec::Line(cand) => (cand.angle - probe.angle).abs() <= cx.co.angle && cx.co.same(cand.c, c),
-        HitRec::Size(_) | HitRec::Angle(_) => false,
+        HitRec::Size(_) | HitRec::Angle(_) | HitRec::Place(_) => false,
     })
 }
 
@@ -192,6 +192,34 @@ fn angle_mark(cx: &mut Ctx<'_>, sol: &Solution, pivot: kurbo::Point, step: Optio
     Some(Mark::Angle { pivot, angle: a, matched: hit_id.filter(|_| matched.is_some()).or(matched), step: lattice.map(|l| l.0), hit: hit.is_some() })
 }
 
+/// The places of the final geometry of the subject: a point, or the nine places of a box and the places that move with it.
+pub(crate) fn final_places(cx: &Ctx<'_>, sol: &Solution) -> Vec<kurbo::Point> {
+    match (cx.q.subject, sol.point, sol.frame) {
+        (Subject::Point { .. }, Some(p), _) => vec![p],
+        (Subject::Box { own, .. }, _, Some(f)) => crate::places::box_places(&f).into_iter().chain(own.iter().map(|p| *p + sol.k)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A place mark for each target place that was weighed and that a place of the final geometry is on.
+fn place_marks(cx: &Ctx<'_>, sol: &Solution) -> Vec<Mark> {
+    let finals = final_places(cx, sol);
+    let mut out: Vec<Mark> = Vec::new();
+    for g in &cx.gathered {
+        if !finals.iter().any(|q| cx.co.same_point(*q, g.at)) {
+            continue;
+        }
+        let hit = sol.hits.iter().any(
+            |h| matches!(h, HitRec::Place(p) if p.g.kind == g.kind && p.g.id == g.id && p.g.number == g.number && cx.co.same_point(p.g.at, g.at)),
+        );
+        let dup = out.iter().any(|m| matches!(m, Mark::Place { at, kind, id, number, .. } if *kind == g.kind && *id == g.id && *number == g.number && cx.co.same_point(*at, g.at)));
+        if !dup && (cx.s.marks != MarkRule::HitsOnly || hit) {
+            out.push(Mark::Place { at: g.at, kind: g.kind, id: g.id, number: g.number, hit });
+        }
+    }
+    out
+}
+
 /// The marks of the final geometry.
 pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
     let mut out = Vec::new();
@@ -227,6 +255,11 @@ pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
     }
     if let (Subject::Edges { moving, .. }, Some(f)) = (cx.q.subject, sol.frame) {
         out.extend(size_marks(cx, sol, &f, &moving));
+    }
+    if matches!(cx.q.subject, Subject::Point { .. } | Subject::Box { .. }) {
+        let places = place_marks(cx, sol);
+        let n = out.len();
+        out.extend(crate::spacing::within_cap(cx, places, n));
     }
     out
 }

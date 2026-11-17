@@ -25,11 +25,24 @@ pub(crate) struct Ctx<'a> {
     pub near: Option<Vec<u32>>,
     /// The box round the subject, relative to the origin.
     pub region: Rect,
+    /// The places weighed, kept for the marks.
+    pub gathered: Vec<crate::places::Gathered>,
 }
 
 impl<'a> Ctx<'a> {
     pub fn new(t: &'a Targets, q: &'a Query<'a>) -> Ctx<'a> {
-        Ctx { t, q, s: q.settings, co: q.settings.coincide, zoom: q.zoom, o: t.origin, work: Work::default(), near: None, region: Rect::ZERO }
+        Ctx {
+            t,
+            q,
+            s: q.settings,
+            co: q.settings.coincide,
+            zoom: q.zoom,
+            o: t.origin,
+            work: Work::default(),
+            near: None,
+            region: Rect::ZERO,
+            gathered: Vec::new(),
+        }
     }
 
     pub fn budget(&self) -> &Budget {

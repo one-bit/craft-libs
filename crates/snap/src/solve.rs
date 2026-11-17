@@ -22,6 +22,8 @@ pub(crate) enum HitRec {
     Size(Cand),
     /// An angle equal to another object's, or on a lattice of angles.
     Angle(crate::angle::AngleHit),
+    /// A place of the subject on a target place.
+    Place(crate::places::PlaceCand),
 }
 
 /// Where the subject lands and what it snapped to.
@@ -96,6 +98,7 @@ fn finish(mut work: Work, sol: Solution, marks: Vec<crate::result::Mark>) -> Sna
 
 fn hit_of(h: &HitRec) -> Hit {
     match h {
+        HitRec::Place(p) => Hit { kind: p.g.kind, id: p.g.id, direction: None, side: None, number: p.g.number, distance: p.dist },
         HitRec::Angle(a) => Hit { kind: a.kind, id: a.id, direction: None, side: None, number: None, distance: a.delta.abs() },
         HitRec::Size(c) => Hit { kind: c.kind, id: c.id, direction: None, side: Some((c.side, c.own)), number: None, distance: c.t },
         HitRec::Line(c) => {
