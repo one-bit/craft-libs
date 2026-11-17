@@ -184,7 +184,8 @@ proptest! {
         let guides: Vec<f64> = gx.iter().map(|g| f64::from(*g) * 0.25).collect();
         // The scene and the subject moved by `by`, asked with `settings`.
         let at = |by: Vec2, settings: &Settings| {
-            let mut b = TargetsBuilder::new(craft_snap::Limits::default());
+            // The lines are grouped by the same rule the query will use, so that a place the numbers cannot say twice is one place in both scenes.
+            let mut b = TargetsBuilder::new(craft_snap::Limits { coincide: s.coincide, ..craft_snap::Limits::default() });
             for (i, o) in objs.iter().enumerate() {
                 b.object(craft_snap::Id(i as u64), object(TurnedBox { centre: o.centre + by, ..*o })).unwrap();
             }
@@ -205,9 +206,8 @@ proptest! {
             prop_assume!(names(&at(hair, &s).0) == names(&base));
         }
         let after = at(Vec2::new(far, -far * 0.5), &narrow).0;
-        // At 1e11 a number is 1.5e-5 coarse, and candidates closer than that to each other are told apart by the noise: there the result has to be
-        // true (`run_kind` has checked it) and the same only where the scene is not on such a tie, which the hair above does not reach at that size.
-        prop_assume!(far < 1.0e10);
+        // At 1e11 a number is 1.5e-5 coarse: the scenes are compared to what the numbers there can say, up to 1e11 as the design asks, and the lines of both
+        // scenes are grouped by the same widened rule, or two lines the numbers there cannot tell apart would be one place in one scene and two in the other.
         let tol = 1e-9 + far * 4.0e-15;
         prop_assert!(same_story(&describe(&base), &describe(&after), tol), "{:?}\n{:?}", describe(&base), describe(&after));
         prop_assert!((after.delta - base.delta).hypot() < tol, "{:?} {:?}", base.delta, after.delta);
