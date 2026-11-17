@@ -212,7 +212,7 @@ mod degenerate {
     }
 
     /// A box with its low side at 0, dragged by its high side to `u_max_at`, among guides.
-    fn drag(guides: &[f64], u_max_at: f64) -> craft_snap::Snapped {
+    pub(super) fn drag(guides: &[f64], u_max_at: f64) -> craft_snap::Snapped {
         let (s, t) = (only(&[Kind::Guide]), scene(&[], guides, &[]));
         let f = frame(u_max_at / 2.0, 0.0, u_max_at, 10.0, 0.0);
         let q = query(Subject::Edges { frame: f, moving: Edges { u_max: true, ..Edges::default() } }, &s);
@@ -516,5 +516,50 @@ mod timed {
             println!("{name}=0: yardstick {y:?}, case {c:?}, ratio {:.2}", ratio(c, y));
             assert!(ratio(c, y) < 3.0, "a cap that stops work never costs more than the work: {name}: {y:?} {c:?}");
         }
+    }
+
+    /// Two cases, each a hostile input and the ordinary input beside it, compared back to back.
+    fn compare(name: &str, yardstick: (&Targets, &craft_snap::Query<'_>), case: (&Targets, &craft_snap::Query<'_>), most: f64) {
+        let (y, c) = beside(&mut || drop(black_box(run(yardstick.0, yardstick.1))), &mut || drop(black_box(run(case.0, case.1))));
+        println!("{name}: yardstick {y:?}, case {c:?}, ratio {:.2}", ratio(c, y));
+        assert!(ratio(c, y) < most, "{name}: {y:?} {c:?}");
+    }
+
+    #[test]
+    #[ignore = "real time"]
+    fn timed_a_box_wider_than_its_room_and_a_resize_that_would_collapse_beside_ordinary_ones() {
+        let s = only(&[Kind::Spacing]);
+        let two = scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(35.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let (wide, centred) = (query(box_subject(frame(20.3, 0.0, 40.0, 10.0, 0.0)), &s), query(box_subject(frame(20.3, 0.0, 6.0, 10.0, 0.0)), &s));
+        compare("wider than the room", (&two, &centred), (&two, &wide), 4.0);
+        let g = only(&[Kind::Guide]);
+        let (collapsing, plain) = (scene(&[], &[0.0], &[]), scene(&[], &[6.0], &[]));
+        let edges = |at: f64| Subject::Edges { frame: frame(at / 2.0, 0.0, at, 10.0, 0.0), moving: Edges { u_max: true, ..Edges::default() } };
+        let (qc, qp) = (query(edges(1.5), &g), query(edges(5.2), &g));
+        compare("a resize that would collapse", (&plain, &qp), (&collapsing, &qc), 4.0);
+    }
+
+    #[test]
+    #[ignore = "real time"]
+    fn timed_the_shortcuts_beside_ordinary_inputs() {
+        // A window with nothing in it, against one with an object in it.
+        let s = Settings { align_reach: Some(Reach::Document(50.0)), ..only(&[Kind::Guide, Kind::Edge]) };
+        let (empty, busy) =
+            (scene(&[(1, frame(1.0e6, 0.0, 10.0, 10.0, 0.0))], &[11.0], &[]), scene(&[(1, frame(30.0, 0.0, 10.0, 10.0, 0.0))], &[11.0], &[]));
+        let q = query(box_subject(frame(0.0, 0.3, 20.0, 10.0, 0.0)), &s);
+        compare("a window with nothing in it", (&busy, &q), (&empty, &q), 4.0);
+        // A row of one object, against a row of two.
+        let s = only(&[Kind::Spacing, Kind::Edge]);
+        let (one, two) = (
+            scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]),
+            scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(35.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]),
+        );
+        let q = query(box_subject(frame(65.4, 0.4, 10.0, 10.0, 0.0)), &s);
+        compare("a row of one object", (&two, &q), (&one, &q), 4.0);
+        // An exact hit, against one that is a hair off.
+        let s = only(&[Kind::Guide]);
+        let t = scene(&[], &[5.0], &[20.0]);
+        let (exact, off) = (query(box_subject(frame(10.0, 14.6, 10.0, 10.0, 0.0)), &s), query(box_subject(frame(10.3, 14.6, 10.0, 10.0, 0.0)), &s));
+        compare("an exact hit", (&t, &off), (&t, &exact), 4.0);
     }
 }
