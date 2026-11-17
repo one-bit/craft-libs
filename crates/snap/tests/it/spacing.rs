@@ -232,13 +232,18 @@ fn only_the_gap_the_snap_repeated_is_marked_when_the_marks_are_asked_to_be_the_h
         r.check(&t, &q).unwrap();
         let mut v: Vec<f64> = r.marks.iter().filter_map(|m| if let Mark::Gap { value, .. } = m { Some(*value) } else { None }).collect();
         v.sort_by(f64::total_cmp);
-        v
+        let neighbour = r.hits.iter().find(|h| h.kind == Kind::Spacing).and_then(|h| h.id);
+        (v, neighbour)
     };
-    let every = gap_values(craft_snap::MarkRule::Coincident);
+    let (every, _) = gap_values(craft_snap::MarkRule::Coincident);
     assert_eq!(every.len(), 4, "{every:?}");
-    let hits = gap_values(craft_snap::MarkRule::HitsOnly);
+    let (hits, neighbour) = gap_values(craft_snap::MarkRule::HitsOnly);
     assert_eq!(hits.len(), 2, "{hits:?}");
     assert!((hits[0] - hits[1]).abs() < 1e-9, "the two of the one value: {hits:?}");
+    // The value is that of the gap beside the box the snap measured from: B (a gap of 20) or C (a gap of 30).
+    let beside = if neighbour == Some(craft_snap::Id(2)) { 20.0 } else { 30.0 };
+    assert!(neighbour == Some(craft_snap::Id(2)) || neighbour == Some(craft_snap::Id(3)), "{neighbour:?}");
+    assert!((hits[0] - beside).abs() < 1e-9, "{neighbour:?}: {hits:?}");
 }
 
 #[test]
@@ -492,4 +497,23 @@ mod rows_everywhere {
         let on = nudge(60.0, true);
         assert!(!spacing_hit(&on) && (on.delta.x - 1.0).abs() < 1e-9, "{:?} {:?}", on.hits, on.delta);
     }
+}
+
+#[test]
+fn a_chained_row_reads_the_boxes_after_the_subject_wherever_the_origin_of_the_targets_falls() {
+    // Five boxes whose median is at 18, left of the subject: the origin is there and the subject's high side is a positive distance from it.
+    let s = Settings { spacing_row: craft_snap::SpacingRow::Linked, ..wide() };
+    let objs = [
+        (1, frame(-100.0, 0.0, 10.0, 10.0, 0.0)),
+        (2, frame(5.0, 0.0, 10.0, 10.0, 0.0)),
+        (3, frame(18.0, 0.0, 10.0, 10.0, 0.0)),
+        (4, frame(65.0, 0.0, 10.0, 10.0, 0.0)),
+        (5, frame(78.0, 0.0, 10.0, 10.0, 0.0)),
+    ];
+    let t = scene(&objs, &[], &[]);
+    let q = query(box_subject(frame(52.3, 0.0, 10.0, 10.0, 0.0)), &s);
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap();
+    // The gap of 3 between the last two repeats before them: the box's high side lands 3 before the first of them, at 57.
+    assert!(r.hits.iter().any(|h| h.kind == Kind::Spacing) && (r.frame.unwrap().centre.x - 52.0).abs() < 1e-9, "{:?} {:?}", r.hits, r.frame);
 }
