@@ -5,6 +5,8 @@
 //! before it is read, and the objects the detail source is asked about are capped. The nearest place wins within the settings; a vertex or an
 //! intersection wins a near tie by 15% of its reach, as a CAD aperture does.
 
+use std::borrow::Cow;
+
 use kurbo::{BezPath, Point, Rect, Vec2};
 
 use crate::budget::{Cuts, Spend, Work};
@@ -14,7 +16,7 @@ use crate::kind::Kind;
 use crate::osnap;
 use crate::query::Detail;
 use crate::settings::Choose;
-use crate::targets::ObjectEntry;
+use crate::targets::{ObjectEntry, Targets};
 
 /// A place of a target that was weighed, kept for the marks.
 #[derive(Clone, Copy, Debug)]
@@ -93,22 +95,32 @@ impl Weigh<'_> {
     }
 }
 
-/// The paths of one object: those the detail source builds, and those the app gave the builder.
-fn paths_of(cx: &mut Ctx<'_>, detail: &mut dyn Detail, id: Id) -> Vec<BezPath> {
+/// The paths of one object: those the detail source builds, and those the app gave the builder, which are borrowed: a path is not copied before
+/// it has been charged for, and one that is refused is never copied.
+fn paths_of<'t>(cx: &mut Ctx<'t>, detail: &mut dyn Detail, id: Id) -> Vec<Cow<'t, BezPath>> {
     let q = cx.q;
-    let mut out = Vec::new();
+    let mut built = Vec::new();
     {
         let mut spend = Spend { work: &mut cx.work, budget: &q.budget };
-        detail.outline(id, &mut spend, &mut out);
+        detail.outline(id, &mut spend, &mut built);
     }
-    let t = cx.t;
+    let t: &'t Targets = cx.t;
     let i = t.paths.partition_point(|p| p.0 < id);
-    out.extend(t.paths.iter().skip(i).take_while(|p| p.0 == id).map(|p| p.1.clone()));
+    let mut out: Vec<Cow<'t, BezPath>> = built.into_iter().map(Cow::Owned).collect();
+    out.extend(t.paths.iter().skip(i).take_while(|p| p.0 == id).map(|p| Cow::Borrowed(&p.1)));
     out
 }
 
 /// The object snaps on the outlines of one object, offered as places.
-fn osnaps(cx: &mut Ctx<'_>, w: &mut Weigh<'_>, id: Id, paths: &[BezPath], base: Option<Point>, probe: &Rect, sets: &mut Vec<Vec<kurbo::Line>>) {
+fn osnaps(
+    cx: &mut Ctx<'_>,
+    w: &mut Weigh<'_>,
+    id: Id,
+    paths: &[Cow<'_, BezPath>],
+    base: Option<Point>,
+    probe: &Rect,
+    sets: &mut Vec<Vec<kurbo::Line>>,
+) {
     let cap = u64::from(cx.budget().pieces);
     let flat = cx.budget().flatness;
     for path in paths {

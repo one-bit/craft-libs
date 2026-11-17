@@ -562,4 +562,28 @@ mod timed {
         let (exact, off) = (query(box_subject(frame(10.0, 14.6, 10.0, 10.0, 0.0)), &s), query(box_subject(frame(10.3, 14.6, 10.0, 10.0, 0.0)), &s));
         compare("an exact hit", (&t, &off), (&t, &exact), 4.0);
     }
+
+    #[test]
+    #[ignore = "real time"]
+    fn timed_a_path_of_two_million_elements_that_is_refused_beside_a_short_one() {
+        // A path is charged for before it is looked at, and one the caps refuse is never copied: refused costs what a short one does, not a copy of it.
+        let path = |n: usize| {
+            let mut p = kurbo::BezPath::new();
+            p.move_to((0.0, 0.0));
+            (1..n).for_each(|i| p.line_to((i as f64 * 1.0e-3, ((i % 7) as f64) * 1.0e-3)));
+            p
+        };
+        let with = |n: usize| {
+            let mut b = TargetsBuilder::new(Limits::default());
+            b.object(Id(1), Object { frame: frame(5.0, 5.0, 10.0, 10.0, 0.0), bounds: None, angle: None, parts: Parts::ALL }).unwrap();
+            b.path(Id(1), path(n)).unwrap();
+            b.build()
+        };
+        let (short, long) = (with(100), with(1_999_000));
+        let s = Settings::default();
+        let q = query(Subject::Point { at: Point::new(0.05, 0.002), base: Some(Point::new(3.0, 3.0)) }, &s);
+        let (y, c) = beside(&mut || drop(black_box(run(&short, &q))), &mut || drop(black_box(run(&long, &q))));
+        println!("a refused path: yardstick {y:?}, case {c:?}, ratio {:.2}", ratio(c, y));
+        assert!(ratio(c, y) < 3.0, "{y:?} {c:?}");
+    }
 }
