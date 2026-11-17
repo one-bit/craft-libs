@@ -11,9 +11,9 @@
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 
-use kurbo::{Point, Rect, Vec2};
+use kurbo::{Point, Rect};
 
-use crate::frame::{Coincide, Id, Side, fold, unit};
+use crate::frame::{Coincide, Id, Side, fold};
 use crate::kind::Kind;
 
 /// The bits of the bisection that finds a place among `n` entries: the steps a search of `n` costs.
@@ -50,6 +50,17 @@ pub(crate) struct Entry {
     pub hi: f64,
     pub count: u32,
     pub id: Option<Id>,
+    /// Where its members are in the set's `members`, when it holds more than one with a span.
+    pub m0: u32,
+    pub mn: u32,
+}
+
+/// One line of a group of coincident lines: its extent along the line.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Member {
+    pub lo: f64,
+    pub hi: f64,
+    pub id: Option<Id>,
 }
 
 /// The lines of one kind in one direction, sorted by offset.
@@ -58,9 +69,33 @@ pub(crate) struct Set {
     pub kind: Kind,
     pub side: Option<Side>,
     pub entries: Vec<Entry>,
+    /// The members of the entries that hold more than one, each entry's sorted by where it starts along the line.
+    pub members: Vec<Member>,
+    /// For each member, the index within its entry of the member that reaches farthest of those up to it.
+    pub argmax: Vec<u32>,
 }
 
 impl Set {
+    /// The extent along the line of the member of an entry nearest to `ext`, the extent of the subject's side: the union of them all for an
+    /// entry of one. Found by bisection in `log2(m)` among the `m` members.
+    pub fn nearest_span(&self, e: &Entry, ext: (f64, f64)) -> (f64, f64) {
+        let union = (e.lo, e.hi);
+        if e.mn == 0 || !(ext.0 <= ext.1) {
+            return union;
+        }
+        let range = e.m0 as usize..(e.m0 + e.mn) as usize;
+        let (Some(m), Some(am)) = (self.members.get(range.clone()), self.argmax.get(range)) else { return union };
+        let (a, b) = ext;
+        let r = m.partition_point(|x| x.lo <= b);
+        let right = m.get(r).map(|x| (x.lo - b, *x));
+        let left = r.checked_sub(1).and_then(|i| am.get(i)).and_then(|j| m.get(*j as usize)).map(|x| ((a - x.hi).max(0.0), *x));
+        [left, right]
+            .into_iter()
+            .flatten()
+            .min_by(|p, q| p.0.total_cmp(&q.0).then(p.1.id.cmp(&q.1.id)).then(p.1.lo.total_cmp(&q.1.lo)))
+            .map_or(union, |(_, x)| (x.lo, x.hi))
+    }
+
     /// The index of the first entry whose offset is not below `at`.
     pub fn insertion(&self, at: f64) -> usize {
         self.entries.partition_point(|e| e.offset < at)
@@ -96,13 +131,12 @@ pub(crate) fn id_before(a: Option<Id>, b: Option<Id>) -> bool {
 pub(crate) struct Dir {
     /// The canonical angle of the normal, that of the first line of the group.
     pub angle: f64,
-    pub normal: Vec2,
-    pub tangent: Vec2,
     pub sets: Vec<Set>,
 }
 
 impl Dir {
     /// The lines of `kind` in this direction.
+    #[cfg(test)]
     pub fn set(&self, kind: Kind) -> Option<&Set> {
         let i = self.sets.partition_point(|s| s.kind < kind);
         self.sets.get(i).filter(|s| s.kind == kind)
@@ -113,8 +147,7 @@ impl Dir {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DirTable {
     pub dirs: Vec<Dir>,
-    /// How many lines went in, and how many places (entries) came out.
-    pub lines: u64,
+    /// How many places (entries) the lines came to.
     pub places: u64,
 }
 
@@ -153,7 +186,7 @@ impl DirTable {
     /// Sorts the lines by direction, kind and offset, and groups the equal places. The result does not depend on the order the lines came in.
     pub fn build(mut raw: Vec<RawLine>, co: &Coincide) -> DirTable {
         raw.sort_by(raw_order);
-        let mut table = DirTable { lines: raw.len() as u64, ..DirTable::default() };
+        let mut table = DirTable::default();
         let mut start = 0;
         while start < raw.len() {
             let first = raw.get(start).map_or(0.0, |l| l.angle);
@@ -166,8 +199,7 @@ impl DirTable {
             }
             if let Some(group) = raw.get_mut(start..end) {
                 group.sort_by(within_group_order);
-                let n = unit(first);
-                table.dirs.push(Dir { angle: first, normal: n, tangent: Vec2::new(-n.y, n.x), sets: group_sets(group, co) });
+                table.dirs.push(Dir { angle: first, sets: group_sets(group, co) });
             }
             start = end;
         }
@@ -201,18 +233,51 @@ impl DirTable {
     }
 }
 
-/// The sets of one direction's lines, which are sorted by kind then offset.
+/// Closes the last entry of a set: its members, when it holds more than one, are sorted along the line and kept with the farthest reach so far.
+fn close_entry(set: &mut Set, pending: &mut Vec<Member>) {
+    if pending.len() > 1 {
+        pending.sort_by(|a, b| a.lo.total_cmp(&b.lo).then(a.hi.total_cmp(&b.hi)).then(a.id.cmp(&b.id)));
+        let (m0, mn) = (set.members.len(), pending.len());
+        let mut best = 0usize;
+        for (i, m) in pending.iter().enumerate() {
+            if pending.get(best).is_none_or(|b| m.hi > b.hi) {
+                best = i;
+            }
+            set.argmax.push(best as u32);
+        }
+        set.members.extend(pending.iter().copied());
+        if let (Some(e), Ok(a), Ok(b)) = (set.entries.last_mut(), u32::try_from(m0), u32::try_from(mn)) {
+            (e.m0, e.mn) = (a, b);
+        }
+    }
+    pending.clear();
+}
+
+/// The sets of one direction's lines, which are sorted by kind, side, then offset.
 fn group_sets(group: &[RawLine], co: &Coincide) -> Vec<Set> {
     let mut sets: Vec<Set> = Vec::new();
+    let mut pending: Vec<Member> = Vec::new();
     for line in group {
         if sets.last().is_none_or(|s| s.kind != line.kind || s.side != line.side) {
-            sets.push(Set { kind: line.kind, side: line.side, entries: Vec::new() });
+            if let Some(last) = sets.last_mut() {
+                close_entry(last, &mut pending);
+            }
+            sets.push(Set { kind: line.kind, side: line.side, entries: Vec::new(), members: Vec::new(), argmax: Vec::new() });
         }
         let Some(set) = sets.last_mut() else { continue };
         match set.entries.last_mut() {
             Some(e) if co.same(e.offset, line.offset) => merge(e, line),
-            _ => set.entries.push(Entry { offset: line.offset, lo: line.lo, hi: line.hi, count: 1, id: line.id }),
+            _ => {
+                close_entry(set, &mut pending);
+                set.entries.push(Entry { offset: line.offset, lo: line.lo, hi: line.hi, count: 1, id: line.id, m0: 0, mn: 0 });
+            }
         }
+        if line.lo <= line.hi {
+            pending.push(Member { lo: line.lo, hi: line.hi, id: line.id });
+        }
+    }
+    if let Some(last) = sets.last_mut() {
+        close_entry(last, &mut pending);
     }
     sets
 }
@@ -311,6 +376,7 @@ impl Grid {
     }
 
     /// How many boxes are in the grid.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.items.len()
     }
@@ -555,7 +621,6 @@ mod tests {
         let t = DirTable::build(lines, &co);
         assert_eq!(t.dirs.len(), 2);
         assert_eq!(t.dirs.first().map(|d| d.sets.first().map_or(0, |s| s.entries.first().map_or(0, |x| x.count))), Some(2));
-        assert_eq!(t.lines, 4);
         // A find within the tolerance of a direction's first angle gives it; farther gives none.
         assert!(t.find(0.0, &co).is_some());
         assert!(t.find(1.5e-9, &co).is_none() || t.find(1.5e-9, &co).is_some_and(|d| d.angle > 0.0));
@@ -567,7 +632,7 @@ mod tests {
         let co = Coincide::default();
         let (a, flipped) = canon(PI - 0.5e-9, co.angle);
         assert!(a < 0.0 && a > -co.angle && flipped);
-        let lines = vec![raw(PI - 0.5e-9, -3.0, Kind::Guide, 1), raw(0.2e-9, 3.0, Kind::Guide, 2)];
+        let lines = [raw(PI - 0.5e-9, -3.0, Kind::Guide, 1), raw(0.2e-9, 3.0, Kind::Guide, 2)];
         // The first is canonised to -0.5e-9 with its offset negated: the same line as the second, 3 along the normal.
         let canonical: Vec<RawLine> = lines
             .iter()
@@ -601,10 +666,49 @@ mod tests {
             let want = offsets.iter().copied().min_by(|a, b| (a - q).abs().total_cmp(&(b - q).abs())).unwrap();
             assert_eq!((got - q).abs(), (want - q).abs(), "{q}");
         }
-        assert!(Set { kind: Kind::Edge, side: None, entries: vec![] }.nearest(1.0).is_none());
+        assert!(Set { kind: Kind::Edge, side: None, entries: vec![], members: vec![], argmax: vec![] }.nearest(1.0).is_none());
         assert_eq!(log_steps(0), 0);
         assert_eq!(log_steps(1), 1);
         assert_eq!(log_steps(1_200_000), 21);
+    }
+
+    #[test]
+    fn the_nearest_member_of_a_group_is_found_by_bisection_as_a_scan_finds_it() {
+        let co = Coincide::default();
+        // 40 lines at one place with spans of every length, then the extents of a subject's side along the line.
+        let lines: Vec<RawLine> = (0..40u64)
+            .map(|i| RawLine {
+                angle: 0.0,
+                offset: 2.0,
+                lo: ((i * 37) % 101) as f64,
+                hi: ((i * 37) % 101) as f64 + (i % 7) as f64,
+                kind: Kind::Edge,
+                id: Some(Id(i)),
+                side: Some(Side::Min),
+            })
+            .collect();
+        let t = DirTable::build(lines.clone(), &co);
+        let set = t.dirs.first().and_then(|d| d.sets.first()).unwrap();
+        assert_eq!((set.entries.len(), set.entries[0].mn), (1, 40));
+        for ext in [(-5.0, -3.0), (0.0, 1.0), (50.0, 52.0), (60.5, 61.0), (200.0, 210.0), (30.0, 99.0)] {
+            let got = set.nearest_span(&set.entries[0], ext);
+            let dist = |lo: f64, hi: f64| {
+                if hi < ext.0 {
+                    ext.0 - hi
+                } else if lo > ext.1 {
+                    lo - ext.1
+                } else {
+                    0.0
+                }
+            };
+            let best = lines.iter().map(|l| dist(l.lo, l.hi)).fold(f64::INFINITY, f64::min);
+            assert_eq!(dist(got.0, got.1), best, "{ext:?}: {got:?}");
+        }
+        // An entry of one is its own span, and a subject with no extent gets the union.
+        let one = DirTable::build(vec![lines[0]], &co);
+        let s1 = one.dirs.first().and_then(|d| d.sets.first()).unwrap();
+        assert_eq!(s1.nearest_span(&s1.entries[0], (5.0, 6.0)), (lines[0].lo, lines[0].hi));
+        assert_eq!(set.nearest_span(&set.entries[0], (f64::INFINITY, f64::NEG_INFINITY)), (set.entries[0].lo, set.entries[0].hi));
     }
 
     #[test]

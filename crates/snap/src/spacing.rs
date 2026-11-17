@@ -84,9 +84,9 @@ pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bo
         .filter_map(|c| tt.objects.get(c.index as usize).map(|o| (c.index, o)))
         .filter(|(_, o)| o.parts.spacing)
         .filter(|(_, o)| !own || crate::angle::wrap(o.frame.angle - subject.angle, quarter).abs() <= cx.co.angle)
-        .map(|(i, o)| {
+        .map(|(_, o)| {
             // A page row reads the box round an object's outline when there is one; an own row reads its own sides.
-            let page = if own { None } else { cx.bounds_of(i) };
+            let page = if own { None } else { o.bounds };
             let ((l, h), (a, b)) = match page {
                 Some(r) => outline_extents(&r, n, cx.o),
                 None => (extent(&o.frame, n, cx.o), extent(&o.frame, t, cx.o)),
@@ -146,10 +146,10 @@ fn starts(cx: &Ctx<'_>, row: &Row, lay: &Layout) -> Vec<(f64, RowObj)> {
     let b = lay.before.iter().max_by(|x, y| x.hi.total_cmp(&y.hi).then(y.id.cmp(&x.id)));
     let a = lay.after.iter().min_by(|x, y| x.lo.total_cmp(&y.lo).then(x.id.cmp(&y.id)));
     let mut out = Vec::new();
-    if let (Some(b), Some(a)) = (b, a) {
-        if a.lo - b.hi > len {
-            out.push((0.5 * (b.hi + a.lo - len), *b));
-        }
+    if let (Some(b), Some(a)) = (b, a)
+        && a.lo - b.hi > len
+    {
+        out.push((0.5 * (b.hi + a.lo - len), *b));
     }
     let values = match cx.s.spacing_gaps {
         SpacingGaps::Row => distinct(cx, &lay.gaps),
@@ -166,10 +166,10 @@ fn starts(cx: &Ctx<'_>, row: &Row, lay: &Layout) -> Vec<(f64, RowObj)> {
                 out.push((b.hi + g, *b));
             }
         }
-        if let Some(a) = a {
-            if let Some((g, _, _)) = lay.gaps.iter().find(|(_, l, _)| l.id == a.id && l.lo == a.lo) {
-                out.push((a.lo - g - len, *a));
-            }
+        if let Some(a) = a
+            && let Some((g, _, _)) = lay.gaps.iter().find(|(_, l, _)| l.id == a.id && l.lo == a.lo)
+        {
+            out.push((a.lo - g - len, *a));
         }
     }
     out
@@ -207,12 +207,28 @@ pub(crate) fn cands(cx: &mut Ctx<'_>, frame: &TurnedBox, probe: &Probe, free: cr
             s: row.lo,
             d: travel,
             t: travel.abs(),
-            rate: 1.0,
             pt: 0,
-            count: 1,
         });
     }
     out
+}
+
+/// The distances, strictly ahead along the page axis `n` (or against it), to the places where the box would repeat a gap in its row, with the
+/// neighbour each is measured from: for a nudge.
+pub(crate) fn ahead(cx: &mut Ctx<'_>, frame: &TurnedBox, n: Vec2, forward: bool) -> Vec<(f64, RowObj)> {
+    if !cx.rule(Kind::Spacing).on {
+        return Vec::new();
+    }
+    let row = gather_row(cx, frame, n, false);
+    let lay = layout(cx, &row);
+    let co = cx.co;
+    starts(cx, &row, &lay)
+        .into_iter()
+        .filter_map(|(start, nb)| {
+            let d = if forward { start - row.lo } else { row.lo - start };
+            (d.is_finite() && d > co.tol(start, row.lo)).then_some((d, nb))
+        })
+        .collect()
 }
 
 /// Whether the box at its final place still repeats a gap in the row it is in then: the row is gathered again there, since moving along the
@@ -309,7 +325,7 @@ pub(crate) fn gap_marks(cx: &mut Ctx<'_>, sol: &Solution, frame: &TurnedBox, pro
         let across = 0.5 * (g.c0 + g.c1);
         let at = |along: f64| cx.o + probe.normal * along + t * across;
         let Some(direction) = direction else { continue };
-        if !(g.c0 < g.c1) {
+        if g.c0.partial_cmp(&g.c1) != Some(std::cmp::Ordering::Less) {
             continue;
         }
         out.push(Mark::Gap { direction, segment: Line::new(at(g.from), at(g.to)), value: g.value, chain, subject: g.subject, hit });

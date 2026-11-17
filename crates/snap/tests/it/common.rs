@@ -37,8 +37,8 @@ pub fn query<'a>(subject: Subject<'a>, settings: &'a Settings) -> Query<'a> {
         constraint: Constraint::None,
         rounding: Rounding::None,
         lattices: &[],
+        view: None,
         budget: Budget::default(),
-        bounds: None,
     }
 }
 
@@ -47,7 +47,7 @@ pub fn run(t: &Targets, q: &Query<'_>) -> Snapped {
 }
 
 pub fn box_subject<'a>(f: TurnedBox) -> Subject<'a> {
-    Subject::Box { frame: f, u: Anchors::ALL, v: Anchors::ALL, own: &[] }
+    Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &[] }
 }
 
 pub fn vec2(x: f64, y: f64) -> Vec2 {

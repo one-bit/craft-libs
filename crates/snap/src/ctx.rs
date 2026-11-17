@@ -27,8 +27,6 @@ pub(crate) struct Ctx<'a> {
     pub region: Rect,
     /// The places weighed, kept for the marks.
     pub gathered: Vec<crate::places::Gathered>,
-    /// The boxes round the outlines of the objects near, asked of the detail source when the settings say `Paths`: object index and box.
-    pub path_bounds: Vec<(u32, Rect)>,
 }
 
 impl<'a> Ctx<'a> {
@@ -44,7 +42,6 @@ impl<'a> Ctx<'a> {
             near: None,
             region: Rect::ZERO,
             gathered: Vec::new(),
-            path_bounds: Vec::new(),
         }
     }
 
@@ -62,35 +59,20 @@ impl<'a> Ctx<'a> {
         if r.on { r.reach.document(self.zoom) } else { 0.0 }
     }
 
+    /// The sorted widths and heights a size match reads: those of the objects in the view, when the kind's scope is the view and the query
+    /// has one, else those of every object.
+    pub fn lengths(&mut self) -> (&'a [crate::index::Length], &'a [crate::index::Length]) {
+        let t: &'a Targets = self.t;
+        match (self.rule(Kind::Size).scope, self.q.view) {
+            (crate::kind::Scope::View, Some(v)) => (v.widths.as_slice(), v.heights.as_slice()),
+            _ => (t.widths(&mut self.work.made), t.heights(&mut self.work.made)),
+        }
+    }
+
     /// Whether a target of this kind at document distance `d` pulls.
     pub fn pulls(&self, kind: Kind, d: f64) -> bool {
         let r = self.rule(kind);
         r.on && r.reach.within(d, self.zoom)
-    }
-
-    /// The box round the outline of object `idx`, when there is one: the detail source's, else the app's.
-    pub fn bounds_of(&self, idx: u32) -> Option<Rect> {
-        self.path_bounds
-            .binary_search_by_key(&idx, |p| p.0)
-            .ok()
-            .and_then(|i| self.path_bounds.get(i))
-            .map(|p| p.1)
-            .or_else(|| self.t.objects.get(idx as usize).and_then(|o| o.bounds))
-    }
-
-    /// Whether the objects with this id count for a size match under the scope of the settings.
-    pub fn in_scope(&self, id: Id) -> bool {
-        let crate::settings::SizeScope::View(view) = self.s.size_scope else { return true };
-        let i = self.t.objects.partition_point(|o| o.id < id);
-        self.t.objects.iter().skip(i).take_while(|o| o.id == id).any(|o| {
-            let b = o.bounds.unwrap_or_else(|| o.frame.bounds());
-            b.x0 <= view.x1 && view.x0 <= b.x1 && b.y0 <= view.y1 && view.y0 <= b.y1
-        })
-    }
-
-    /// A point relative to the origin.
-    pub fn rel(&self, p: Point) -> Vec2 {
-        p - self.o
     }
 }
 
@@ -122,7 +104,7 @@ pub(crate) fn probes(lines: &[SideLine], co: &Coincide, keep: &dyn Fn(&SideLine)
     for l in lines.iter().filter(|l| keep(l)) {
         let (angle, flipped) = canon(l.angle, co.angle);
         let (offset, lo, hi) = if flipped { (-l.offset, -l.hi, -l.lo) } else { (l.offset, l.lo, l.hi) };
-        let side = ProbeSide { side: l.side, own: l.own, offset, lo, hi };
+        let side = ProbeSide { side: crate::frame::canon_side(l.side, flipped), own: l.own, offset, lo, hi };
         match out.iter_mut().find(|(p, own)| *own == l.own && (p.angle - angle).abs() <= co.angle) {
             Some((p, _)) => p.sides.push(side),
             None => out.push((Probe { angle, normal: crate::frame::unit(angle), sides: vec![side] }, l.own)),
@@ -150,11 +132,8 @@ pub(crate) struct Cand {
     pub d: f64,
     /// How far the subject travels for it: its distance for the settings.
     pub t: f64,
-    /// How fast the side's offset changes with the free parameter (`d`): 1 for a move along the line's normal.
-    pub rate: f64,
     /// For a resize: which point of which moving side the line is met by (side number times four, plus the point's index).
     pub pt: u8,
-    pub count: u32,
 }
 
 /// The order of two candidates for a total order: id, then side, then kind, then offset.
@@ -233,9 +212,7 @@ mod tests {
             s: 0.0,
             d: t,
             t,
-            rate: 1.0,
             pt: 0,
-            count: 1,
         }
     }
 

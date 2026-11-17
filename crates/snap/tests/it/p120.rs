@@ -1,9 +1,10 @@
-//! The modes the owner's ruling P120 adds beside the design's: same-side matching, proportions kept at a corner, the box round an outline,
-//! nudging to the next place or by a plain step, size match scoped to a view, and labels to three places.
+//! The modes the owner's ruling P120 (and P123) adds beside the design's first ones: same-side matching, proportions kept from a corner or a
+//! side handle, a path box for a turned shape, nudging to the first target ahead within a step or anywhere, size match in a view, and a line
+//! mark that runs to the nearest target.
 
 use craft_snap::{
-    About, Anchors, Axis, BoxRound, Budget, Constraint, Cuts, Detail, Edges, Id, Kind, Limits, Matching, NoDetail, NudgeMode, Object, Parts, Reach,
-    Settings, SizeScope, Spend, Subject, TargetsBuilder, TurnedBox,
+    About, Anchors, Axis, Constraint, Cuts, Edges, Id, Kind, KindRule, Limits, LineSpan, Mark, Matching, NudgeReach, Object, Parts, Reach, Scope,
+    Settings, Subject, TargetsBuilder, TurnedBox,
 };
 use kurbo::{Point, Rect};
 
@@ -12,15 +13,11 @@ use crate::common::*;
 mod same_side {
     use super::*;
 
-    fn box_at(centre_x: f64) -> TurnedBox {
-        frame(centre_x, 50.0, 10.0, 4.0, 0.0)
-    }
-
     fn hits_with(matching: Matching, centre_x: f64) -> Vec<(Kind, craft_snap::Side)> {
-        // One object, 20 wide at x 100 to 120.
+        // One object, 20 wide at x 100 to 120. The box is far from it across, so no place pulls.
         let t = scene(&[(1, frame(110.0, 0.0, 20.0, 4.0, 0.0))], &[], &[]);
         let s = Settings { matching, ..Settings::default() };
-        let q = query(Subject::Box { frame: box_at(centre_x), u: Anchors::ALL, v: Anchors { min: false, mid: false, max: false }, own: &[] }, &s);
+        let q = query(Subject::Box { frame: frame(centre_x, 50.0, 10.0, 4.0, 0.0), bounds: None, u: Anchors::ALL, v: Anchors::NONE, own: &[] }, &s);
         let r = run(&t, &q);
         r.check(&t, &q).unwrap();
         r.hits.iter().filter_map(|h| h.side.map(|(side, _)| (h.kind, side))).collect()
@@ -29,237 +26,257 @@ mod same_side {
     #[test]
     fn a_low_side_meets_a_low_edge_and_not_a_high_one_under_same_side() {
         // The box's low side is at 118: 2 from the object's high edge at 120, and far from its low edge at 100.
-        let any = hits_with(Matching::AnyToAny, 123.0);
-        assert!(any.contains(&(Kind::Edge, craft_snap::Side::Min)), "{any:?}");
-        let like = hits_with(Matching::LikeToLike, 123.0);
-        assert!(like.contains(&(Kind::Edge, craft_snap::Side::Min)), "an edge meets an edge: {like:?}");
+        assert!(hits_with(Matching::AnyToAny, 123.0).contains(&(Kind::Edge, craft_snap::Side::Min)));
+        assert!(hits_with(Matching::LikeToLike, 123.0).contains(&(Kind::Edge, craft_snap::Side::Min)), "an edge meets an edge");
         let same = hits_with(Matching::SameSide, 123.0);
         assert!(same.is_empty(), "the low side does not meet a high edge: {same:?}");
-        // The box's high side at 122 is 2 from the high edge at 120: the same side meets.
         let same = hits_with(Matching::SameSide, 117.0);
         assert!(same.contains(&(Kind::Edge, craft_snap::Side::Max)), "{same:?}");
-        // Middles meet middles under every rule that has sides.
         let same = hits_with(Matching::SameSide, 112.0);
         assert!(same.contains(&(Kind::Centre, craft_snap::Side::Mid)), "{same:?}");
+    }
+
+    #[test]
+    fn guides_have_no_side_and_meet_any_side_under_every_rule() {
+        let t = scene(&[], &[125.0], &[]);
+        for matching in [Matching::AnyToAny, Matching::LikeToLike, Matching::SameSide] {
+            let s = Settings { matching, ..Settings::default() };
+            let q = query(Subject::Box { frame: frame(123.0, 50.0, 10.0, 4.0, 0.0), bounds: None, u: Anchors::ALL, v: Anchors::NONE, own: &[] }, &s);
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            assert!(r.hits.iter().any(|h| h.kind == Kind::Guide), "{matching:?}");
+        }
+    }
+
+    #[test]
+    fn two_boxes_turned_alike_meet_by_the_same_side_along_their_own_direction() {
+        let a = 30f64.to_radians();
+        let t = scene(&[(1, frame(0.0, 0.0, 20.0, 6.0, a))], &[], &[]);
+        let mut s = Settings { matching: Matching::SameSide, frames: craft_snap::Frames { page: false, own: true }, ..Settings::default() };
+        for k in [Kind::Corner, Kind::SideMiddle] {
+            s.kinds.set(k, KindRule { on: false, reach: Reach::Screen(6.0), priority: 1, scope: Scope::All });
+        }
+        // The same box moved 2 along its own u: every side is 2 off the same side of the object, and not the other side.
+        let (c, sn) = (a.cos(), a.sin());
+        let f = frame(2.0 * c, 2.0 * sn, 20.0, 6.0, a);
+        let q = query(Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::NONE, own: &[] }, &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(r.hits.iter().any(|h| h.kind == Kind::Edge), "{:?}", r.hits);
+        assert!((r.frame.unwrap().centre - Point::ORIGIN).hypot() < 1e-9, "it lands back on the object's sides");
     }
 }
 
 mod proportions {
     use super::*;
 
-    fn resize(settings: &Settings, constraint: Constraint, moving: Edges) -> craft_snap::Snapped {
+    fn resize(constraint: Constraint, moving: Edges) -> craft_snap::Snapped {
         let t = scene(&[], &[12.5], &[]);
+        let s = Settings::default();
         let f = frame(0.0, 0.0, 20.0, 10.0, 0.0);
-        let q = craft_snap::Query { constraint, ..query(Subject::Edges { frame: f, moving }, settings) };
+        let q = craft_snap::Query { constraint, ..query(Subject::Edges { frame: f, moving }, &s) };
         let r = run(&t, &q);
         r.check(&t, &q).unwrap();
         r
     }
 
     #[test]
-    fn a_corner_keeps_its_proportions_with_no_key_when_the_settings_say_so() {
+    fn a_corner_snaps_inside_the_kept_proportions() {
         let corner = Edges { u_max: true, v_max: true, ..Edges::default() };
-        let off = resize(&Settings::default(), Constraint::None, corner);
-        let f = off.frame.unwrap();
-        assert!((f.size.width - 22.5).abs() < 1e-9 && (f.size.height - 10.0).abs() < 1e-9, "{f:?}");
-        let keep = Settings { corners_keep_proportions: true, ..Settings::default() };
-        let on = resize(&keep, Constraint::None, corner);
-        let f = on.frame.unwrap();
-        assert!((f.size.width - 22.5).abs() < 1e-9 && (f.size.height - 11.25).abs() < 1e-9, "the corner scaled about the fixed one: {f:?}");
-        assert!(on.hits.iter().any(|h| h.kind == Kind::Guide));
-        // A side handle is not a corner: it keeps nothing unless asked.
-        let side = resize(&keep, Constraint::None, Edges { u_max: true, ..Edges::default() });
-        assert!((side.frame.unwrap().size.height - 10.0).abs() < 1e-12);
+        let r = resize(Constraint::Aspect { ratio: 2.0, about: About::Fixed }, corner);
+        let f = r.frame.unwrap();
+        assert!((f.size.width - 22.5).abs() < 1e-9 && (f.size.height - 11.25).abs() < 1e-9, "scaled about the fixed corner onto the guide: {f:?}");
+        assert!(r.hits.iter().any(|h| h.kind == Kind::Guide));
+        let free = resize(Constraint::None, corner);
+        assert!((free.frame.unwrap().size.height - 10.0).abs() < 1e-9, "without the constraint the other side stays");
     }
 
     #[test]
-    fn a_kept_ratio_on_any_handle_is_the_apps_to_ask_for() {
-        let side = Edges { u_max: true, ..Edges::default() };
-        let r = resize(&Settings::default(), Constraint::Aspect { ratio: 2.0, about: About::Fixed }, side);
+    fn a_side_handle_keeps_the_opposite_side_and_grows_the_other_axis_about_its_middle() {
+        let r = resize(Constraint::Aspect { ratio: 2.0, about: About::Fixed }, Edges { u_max: true, ..Edges::default() });
         let f = r.frame.unwrap();
-        assert!((f.size.width / f.size.height - 2.0).abs() < 1e-9, "{f:?}");
-        assert!((f.size.width - 22.5).abs() < 1e-9, "the side lands on the guide: {f:?}");
-        let c = resize(&Settings::default(), Constraint::Aspect { ratio: 2.0, about: About::Centre }, side);
-        let f = c.frame.unwrap();
-        assert!((f.size.width / f.size.height - 2.0).abs() < 1e-9 && f.centre == Point::new(0.0, 0.0), "{f:?}");
+        assert!((f.size.width - 22.5).abs() < 1e-9 && (f.size.height - 11.25).abs() < 1e-9, "{f:?}");
+        assert!((f.centre.x - 1.25).abs() < 1e-9, "the low side stays at -10: {f:?}");
+        assert!(f.centre.y.abs() < 1e-9, "the other axis grew about its middle: {f:?}");
+        let c = resize(Constraint::Aspect { ratio: 2.0, about: About::Centre }, Edges { u_max: true, ..Edges::default() });
+        assert_eq!(c.frame.unwrap().centre, Point::ORIGIN);
     }
 }
 
 mod nudging {
     use super::*;
 
-    fn nudge(mode: NudgeMode, guides: &[f64], step: f64) -> (craft_snap::Snapped, craft_snap::Targets, Settings) {
+    fn nudge(reach: NudgeReach, fallback: f64, guides: &[f64]) -> (craft_snap::Snapped, craft_snap::Targets, Settings) {
         let t = scene(&[], guides, &[]);
-        let s = Settings { nudge: mode, ..Settings::default() };
-        let q = query(Subject::Nudge { frame: frame(0.0, 0.0, 20.0, 4.0, 0.0), axis: Axis::X, forward: true, step }, &s);
+        let s = Settings::default();
+        let q = query(Subject::Nudge { frame: frame(0.0, 0.0, 20.0, 4.0, 0.0), bounds: None, axis: Axis::X, forward: true, reach, fallback }, &s);
         let r = run(&t, &q);
         r.check(&t, &q).unwrap();
         (r, t, s)
     }
 
     #[test]
-    fn the_next_place_ahead_is_taken_however_far_else_one_tick() {
-        // The box's right side is at 10; a guide at 13.7 is far past a step of 0.25.
-        let (r, ..) = nudge(NudgeMode::Next { tick: 1.0 }, &[13.7], 0.25);
+    fn within_stops_at_the_step_and_anywhere_goes_to_the_target() {
+        // The box's right side is at 10; the first guide ahead is 3.7 past it.
+        let (r, ..) = nudge(NudgeReach::Within(0.25), 0.25, &[13.7]);
+        assert_eq!(r.delta.x, 0.25);
+        let (r, ..) = nudge(NudgeReach::Anywhere, 1.0, &[13.7]);
         assert!((r.delta.x - 3.7).abs() < 1e-9, "{:?}", r.delta);
         assert_eq!(r.hits.first().map(|h| h.kind), Some(Kind::Guide));
-        // Nothing ahead: one tick, not the step.
-        let (r, ..) = nudge(NudgeMode::Next { tick: 1.0 }, &[-50.0], 0.25);
-        assert_eq!(r.delta.x, 1.0);
-        assert!(r.hits.is_empty());
-        // The design's mode stops only within a step.
-        let (r, ..) = nudge(NudgeMode::Stop, &[13.7], 0.25);
-        assert_eq!(r.delta.x, 0.25);
     }
 
     #[test]
-    fn a_plain_nudge_is_the_step_exactly_and_ignores_targets() {
-        let (r, ..) = nudge(NudgeMode::Plain, &[10.1], 0.25);
-        assert_eq!(r.delta.x, 0.25);
-        assert!(r.hits.is_empty());
-        let (r, ..) = nudge(NudgeMode::Plain, &[], 1.0);
-        assert_eq!((r.delta.x, r.delta.y), (1.0, 0.0));
+    fn a_nudge_with_nothing_ahead_moves_by_the_fallback_and_one_a_billion_away_travels_the_whole_way_at_the_same_cost() {
+        let (none, ..) = nudge(NudgeReach::Anywhere, 0.5, &[-50.0]);
+        assert_eq!(none.delta.x, 0.5);
+        assert!(none.hits.is_empty());
+        let (far, ..) = nudge(NudgeReach::Anywhere, 0.5, &[1.0e9]);
+        assert!((far.delta.x - (1.0e9 - 10.0)).abs() < 1e-3, "{:?}", far.delta);
+        assert_eq!(far.work.bisect_steps, none.work.bisect_steps, "the same bisections, however far the target is");
+        assert_eq!(far.work.visited, none.work.visited);
+        assert!(far.work.line_steps <= none.work.line_steps + 1, "the mark of the line it stops on costs one step more");
     }
 
     #[test]
-    fn a_nudge_that_cannot_be_told_its_tick_refuses() {
+    fn a_nudge_stops_at_the_next_equal_gap_as_it_does_at_a_line() {
+        // Boxes 10 wide at x 0, 30 and 60 (gaps of 20), and a box at 128 to 138 after them: the next place that repeats the gap is 100 to 110.
+        let objs: Vec<(u64, TurnedBox)> =
+            [0.0, 30.0, 60.0].iter().enumerate().map(|(i, x)| (i as u64, frame(x + 5.0, 0.0, 10.0, 10.0, 0.0))).collect();
+        let t = scene(&objs, &[], &[]);
+        let s = Settings { spacing_reach: craft_snap::SpacingReach { times: 4.0, at_least: 500.0 }, ..Settings::default() };
+        let f = frame(110.0 - 5.0 + 1.0, 0.0, 10.0, 10.0, 0.0);
+        let q = query(Subject::Nudge { frame: f, bounds: None, axis: Axis::X, forward: false, reach: NudgeReach::Anywhere, fallback: 0.1 }, &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(r.hits.iter().any(|h| h.kind == Kind::Spacing), "{:?}", r.hits);
+        assert!(r.marks.iter().any(|m| matches!(m, Mark::Gap { hit: true, .. })), "{:?}", r.marks);
+    }
+
+    #[test]
+    fn a_nudge_that_cannot_be_told_its_distance_refuses() {
         let t = scene(&[], &[], &[]);
-        for tick in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            let s = Settings { nudge: NudgeMode::Next { tick }, ..Settings::default() };
-            let q = query(Subject::Nudge { frame: frame(0.0, 0.0, 1.0, 1.0, 0.0), axis: Axis::X, forward: true, step: 1.0 }, &s);
+        let s = Settings::default();
+        for (reach, fallback) in [
+            (NudgeReach::Within(f64::NAN), 1.0),
+            (NudgeReach::Anywhere, f64::INFINITY),
+            (NudgeReach::Anywhere, -1.0),
+            (NudgeReach::Within(1.0), f64::NAN),
+        ] {
+            let q = query(Subject::Nudge { frame: frame(0.0, 0.0, 1.0, 1.0, 0.0), bounds: None, axis: Axis::X, forward: true, reach, fallback }, &s);
             let r = run(&t, &q);
-            assert_eq!((r.delta.x, r.work.refused), (0.0, Some(craft_snap::Refusal::Settings)), "{tick}");
+            assert_eq!((r.delta.x, r.work.refused), (0.0, Some(craft_snap::Refusal::NotFinite)), "{reach:?} {fallback}");
+            r.check(&t, &q).unwrap();
         }
     }
 }
 
-mod size_scope {
+mod size_in_view {
     use super::*;
 
-    fn resize_width(scope: SizeScope) -> craft_snap::Snapped {
-        // Another object 7 wide, at x 500.
-        let t = scene(&[(1, frame(500.0, 0.0, 7.0, 3.0, 0.0))], &[], &[]);
-        let s = Settings { size_scope: scope, ..Settings::default() };
-        let f = frame(0.0, 0.0, 8.0, 5.0, 0.0);
-        let q = query(Subject::Edges { frame: f, moving: Edges { u_max: true, ..Edges::default() } }, &s);
-        let r = run(&t, &q);
-        r.check(&t, &q).unwrap();
+    fn view_rule(settings: &mut Settings) {
+        settings.kinds.set(Kind::Size, KindRule { on: true, reach: Reach::Screen(6.0), priority: 6, scope: Scope::View });
+    }
+
+    fn resize_width(view: Option<Rect>, targets: &craft_snap::Targets) -> craft_snap::Snapped {
+        let mut s = Settings::default();
+        view_rule(&mut s);
+        let index = view.map(|v| targets.in_view(v));
+        let q = craft_snap::Query {
+            view: index.as_ref(),
+            ..query(Subject::Edges { frame: frame(0.0, 0.0, 8.0, 5.0, 0.0), moving: Edges { u_max: true, ..Edges::default() } }, &s)
+        };
+        let r = run(targets, &q);
+        r.check(targets, &q).unwrap();
         r
     }
 
     #[test]
-    fn a_size_match_is_scoped_to_the_view_when_one_is_given() {
-        let anywhere = resize_width(SizeScope::Anywhere);
-        assert!(anywhere.hits.iter().any(|h| h.kind == Kind::Size), "{:?}", anywhere.hits);
-        let inside = resize_width(SizeScope::View(Rect::new(400.0, -50.0, 600.0, 50.0)));
-        assert!(inside.hits.iter().any(|h| h.kind == Kind::Size));
-        let outside = resize_width(SizeScope::View(Rect::new(-50.0, -50.0, 50.0, 50.0)));
-        assert!(!outside.hits.iter().any(|h| h.kind == Kind::Size), "{:?}", outside.hits);
-        assert!(!outside.marks.iter().any(|m| matches!(m, craft_snap::Mark::Size { .. })));
-    }
-}
-
-mod box_round {
-    use super::*;
-
-    /// A turned object whose outline reaches farther than its corners do: the app gives the box round the outline.
-    fn scene_with_bounds() -> craft_snap::Targets {
-        let mut b = TargetsBuilder::new(Limits::default());
-        let f = frame(100.0, 0.0, 20.0, 10.0, 30f64.to_radians());
-        let round = Rect::new(80.0, -30.0, 140.0, 30.0);
-        b.object(Id(1), Object { frame: f, bounds: Some(round), angle: None, parts: Parts::ALL }).unwrap();
-        b.build()
+    fn a_size_match_looks_only_at_the_objects_in_the_view() {
+        let t = scene(&[(1, frame(500.0, 0.0, 7.0, 3.0, 0.0))], &[], &[]);
+        assert!(resize_width(None, &t).hits.iter().any(|h| h.kind == Kind::Size), "no view: every object");
+        assert!(resize_width(Some(Rect::new(400.0, -50.0, 600.0, 50.0)), &t).hits.iter().any(|h| h.kind == Kind::Size));
+        let out = resize_width(Some(Rect::new(-50.0, -50.0, 50.0, 50.0)), &t);
+        assert!(!out.hits.iter().any(|h| h.kind == Kind::Size), "{:?}", out.hits);
+        assert!(!out.marks.iter().any(|m| matches!(m, Mark::Size { .. })));
     }
 
     #[test]
-    fn the_page_lines_of_a_turned_object_are_the_box_round_its_outline_when_it_is_given() {
-        let t = scene_with_bounds();
-        let s = Settings::default();
-        // A box whose right side is 3 left of the outline's right edge at 140.
-        let f = frame(132.0, 100.0, 10.0, 4.0, 0.0);
-        let q = query(box_subject(f), &s);
-        let r = run(&t, &q);
-        r.check(&t, &q).unwrap();
-        assert!((r.delta.x - 3.0).abs() < 1e-9, "{:?}", r.delta);
-        assert!(r.hits.iter().any(|h| h.kind == Kind::Edge && h.id == Some(Id(1))));
-    }
-
-    #[test]
-    fn the_subjects_outline_box_is_used_under_paths_and_ignored_under_corners() {
-        let t = scene(&[], &[50.0], &[]);
-        // The subject's frame is 10 wide at 20 to 30; the box round its outline reaches to 46 on the right.
-        let f = frame(25.0, 0.0, 10.0, 4.0, 30f64.to_radians());
-        let round = Some(Rect::new(10.0, -6.0, 46.0, 6.0));
-        for (mode, expect_guide) in [(BoxRound::Paths, true), (BoxRound::Corners, false)] {
-            let s = Settings { box_round: mode, ..Settings::default() };
-            let q = craft_snap::Query { bounds: round, ..query(box_subject(f), &s) };
-            let r = run(&t, &q);
-            r.check(&t, &q).unwrap();
-            assert_eq!(
-                r.hits.iter().any(|h| h.kind == Kind::Guide && h.side.is_some_and(|(_, own)| own == craft_snap::OwnOrBounds::Bounds)),
-                expect_guide,
-                "{mode:?}: {:?}",
-                r.hits
-            );
-        }
-    }
-
-    /// A detail source that knows the box round the outline of object 1 only.
-    struct Outlines {
-        asked: Vec<Id>,
-    }
-
-    impl Detail for Outlines {
-        fn points(&mut self, _id: Id, _spend: &mut Spend<'_>, _out: &mut Vec<(Point, Kind, u32)>) {}
-        fn outline(&mut self, _id: Id, _spend: &mut Spend<'_>, _out: &mut Vec<kurbo::BezPath>) {}
-        fn bounds(&mut self, id: Id, spend: &mut Spend<'_>) -> Option<Rect> {
-            self.asked.push(id);
-            spend.detail(1).then(|| (id == Id(1)).then(|| Rect::new(80.0, -30.0, 140.0, 30.0))).flatten()
-        }
-    }
-
-    fn near_scene() -> craft_snap::Targets {
+    fn one_match_in_the_view_among_a_hundred_thousand_equal_lengths_outside_it_is_found_by_one_bisection() {
         let mut b = TargetsBuilder::new(Limits::default());
-        for (i, x) in [100.0, 160.0, 220.0].iter().enumerate() {
+        for i in 0..100_000u64 {
             b.object(
-                Id(i as u64 + 1),
-                Object { frame: frame(*x, 0.0, 20.0, 10.0, 30f64.to_radians()), bounds: None, angle: None, parts: Parts::ALL },
+                Id(i + 10),
+                Object {
+                    frame: frame(10_000.0 + (i % 400) as f64 * 3.0, 1000.0 + (i / 400) as f64 * 3.0, 7.0, 2.0, 0.0),
+                    bounds: None,
+                    angle: None,
+                    parts: Parts { size: true, ..Parts::NONE },
+                },
             )
             .unwrap();
         }
+        // The one in view: also 7 wide, a hair off so that it is the nearest to 7.3.
+        b.object(Id(1), Object { frame: frame(5.0, 0.0, 7.2, 2.0, 0.0), bounds: None, angle: None, parts: Parts { size: true, ..Parts::NONE } })
+            .unwrap();
+        let t = b.build();
+        let view = Rect::new(-50.0, -50.0, 50.0, 50.0);
+        let index = t.in_view(view);
+        assert_eq!((index.len(), index.tested()), (1, 100_001), "one bounds test for each object, a sort of the one in view");
+        let mut s = Settings::default();
+        view_rule(&mut s);
+        let q = craft_snap::Query {
+            view: Some(&index),
+            ..query(Subject::Edges { frame: frame(0.0, 0.0, 7.5, 5.0, 0.0), moving: Edges { u_max: true, ..Edges::default() } }, &s)
+        };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        let hit = r.hits.iter().find(|h| h.kind == Kind::Size).unwrap();
+        assert_eq!(hit.id, Some(Id(1)));
+        assert!((r.frame.unwrap().size.width - 7.2).abs() < 1e-9);
+        assert!(r.work.bisect_steps < 80 && r.work.line_steps < 8, "{:?}", r.work);
+    }
+}
+
+mod bounds {
+    use super::*;
+
+    fn turned_with_bounds() -> craft_snap::Targets {
+        let mut b = TargetsBuilder::new(Limits::default());
+        let f = frame(100.0, 0.0, 20.0, 10.0, 30f64.to_radians());
+        b.object(Id(1), Object { frame: f, bounds: Some(Rect::new(80.0, -30.0, 140.0, 30.0)), angle: None, parts: Parts::ALL }).unwrap();
         b.build()
     }
 
     #[test]
-    fn the_box_round_a_near_objects_outline_is_asked_on_demand_charged_and_capped() {
-        let t = near_scene();
-        let s = Settings { box_round: BoxRound::Paths, align_reach: Some(Reach::Document(200.0)), ..Settings::default() };
-        let f = frame(132.0, 100.0, 10.0, 4.0, 0.0);
-        let q = query(box_subject(f), &s);
-        let mut d = Outlines { asked: Vec::new() };
-        let r = craft_snap::snap(&t, &q, &mut d);
+    fn a_turned_objects_page_lines_are_the_box_the_app_gives_when_it_gives_one() {
+        let t = turned_with_bounds();
+        let s = Settings::default();
+        let q = query(box_subject(frame(132.0, 100.0, 10.0, 4.0, 0.0)), &s);
+        let r = run(&t, &q);
         r.check(&t, &q).unwrap();
-        assert!(!d.asked.is_empty() && d.asked.len() <= 3, "{:?}", d.asked);
-        assert_eq!(r.work.outlines as usize, d.asked.len());
-        assert_eq!(r.work.detail as usize, d.asked.len());
-        assert!((r.delta.x - 3.0).abs() < 1e-9, "the detail source's box for object 1 is the line: {:?}", r.delta);
-        // With a budget for one, only one is asked and the result says so.
-        let q = craft_snap::Query { budget: Budget { outlines: 1, ..Budget::default() }, ..query(box_subject(f), &s) };
-        let mut d = Outlines { asked: Vec::new() };
-        let r = craft_snap::snap(&t, &q, &mut d);
-        assert_eq!(d.asked.len(), 1);
-        assert!(r.work.cut.has(Cuts::OUTLINES) && r.work.truncated);
-        // Under `Corners` it is never asked.
-        let s = Settings { box_round: BoxRound::Corners, ..s };
-        let q = query(box_subject(f), &s);
-        let mut d = Outlines { asked: Vec::new() };
-        let _ = craft_snap::snap(&t, &q, &mut d);
-        assert!(d.asked.is_empty());
-        let _ = NoDetail;
+        assert!((r.delta.x - 3.0).abs() < 1e-9, "the right side lands on 140: {:?}", r.delta);
     }
 
     #[test]
-    fn a_far_outline_box_that_is_not_a_number_is_ignored() {
+    fn a_turned_subjects_own_bounds_are_what_it_aligns_by_on_the_page_axes_and_move_with_it() {
+        let t = scene(&[], &[50.0], &[]);
+        let s = Settings::default();
+        // The frame is 10 wide at 20 to 30; the box round its paths reaches to 46 on the right: 4 from the guide at 50.
+        let f = frame(25.0, 0.0, 10.0, 4.0, 30f64.to_radians());
+        let with = |bounds: Option<Rect>| {
+            let q = query(Subject::Box { frame: f, bounds, u: Anchors::ALL, v: Anchors::ALL, own: &[] }, &s);
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            r
+        };
+        let by_paths = with(Some(Rect::new(10.0, -6.0, 46.0, 6.0)));
+        assert!((by_paths.delta.x - 4.0).abs() < 1e-9, "{:?}", by_paths.delta);
+        let by_corners = with(None);
+        assert!(by_corners.hits.iter().all(|h| h.side.is_none_or(|(_, own)| own == craft_snap::OwnOrBounds::Own) || by_corners.delta.x != 4.0));
+    }
+
+    #[test]
+    fn bounds_that_are_not_a_number_are_ignored() {
         let mut b = TargetsBuilder::new(Limits::default());
         let f = frame(0.0, 0.0, 4.0, 4.0, 0.3);
         b.object(Id(1), Object { frame: f, bounds: Some(Rect::new(f64::NAN, 0.0, 1.0, 1.0)), angle: None, parts: Parts::ALL }).unwrap();
@@ -267,5 +284,105 @@ mod box_round {
         let s = Settings::default();
         let q = query(box_subject(frame(10.0, 0.0, 2.0, 2.0, 0.0)), &s);
         run(&t, &q).check(&t, &q).unwrap();
+    }
+}
+
+mod line_span {
+    use super::*;
+
+    fn three_boxes() -> craft_snap::Targets {
+        // Three boxes in a column on the line x = 50 (their right sides): at y 0, 100 and 300.
+        let objs: Vec<(u64, TurnedBox)> = [(1u64, 0.0), (2, 100.0), (3, 300.0)].iter().map(|(i, y)| (*i, frame(45.0, *y, 10.0, 10.0, 0.0))).collect();
+        scene(&objs, &[], &[])
+    }
+
+    fn mark_for(span: LineSpan) -> (craft_snap::Snapped, craft_snap::Targets) {
+        let t = three_boxes();
+        let s = Settings { line_span: span, frames: craft_snap::Frames { page: true, own: false }, ..Settings::default() };
+        // The subject's right side is on x = 50, near the first box, at y 130 to 140.
+        let q = query(
+            Subject::Box {
+                frame: frame(45.0, 135.0, 10.0, 10.0, 0.0),
+                bounds: None,
+                u: Anchors { min: false, mid: false, max: true },
+                v: Anchors::NONE,
+                own: &[],
+            },
+            &s,
+        );
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        (r, t)
+    }
+
+    fn reach_of(r: &craft_snap::Snapped) -> (f64, f64) {
+        let m = r
+            .marks
+            .iter()
+            .find_map(|m| if let Mark::Line { segment, kinds, .. } = m { kinds.contains(&Kind::Edge).then_some(*segment) } else { None })
+            .unwrap();
+        (m.p0.y.min(m.p1.y), m.p0.y.max(m.p1.y))
+    }
+
+    #[test]
+    fn a_line_through_three_boxes_stops_at_the_nearer_one_under_nearest_and_covers_them_all_under_every() {
+        let (every, _) = mark_for(LineSpan::Every);
+        let (lo, hi) = reach_of(&every);
+        assert!(lo <= -5.0 + 1e-9 && hi >= 305.0 - 1e-9, "{lo} {hi}");
+        let (nearest, _) = mark_for(LineSpan::Nearest);
+        let (lo, hi) = reach_of(&nearest);
+        // The subject spans y 130 to 140; the nearest box is the one at y 100 (95 to 105), and the one at 300 is not reached.
+        assert!((lo - 95.0).abs() < 1e-9 && (hi - 140.0).abs() < 1e-9, "{lo} {hi}");
+        let count = nearest
+            .marks
+            .iter()
+            .find_map(|m| if let Mark::Line { count, kinds, .. } = m { kinds.contains(&Kind::Edge).then_some(*count) } else { None });
+        assert_eq!(count, Some(3), "a target the segment does not reach is still counted");
+    }
+
+    #[test]
+    fn a_hundred_thousand_lines_at_one_place_cost_one_step_under_every_and_one_bisection_under_nearest() {
+        let mut b = TargetsBuilder::new(Limits::default());
+        for i in 0..100_000u64 {
+            b.line(Some(Id(i)), Axis::X, 50.0, Some((i as f64 * 3.0, i as f64 * 3.0 + 1.0)), Kind::Guide).unwrap();
+        }
+        let t = b.build();
+        assert_eq!(t.report().line_places, 1);
+        let run_with = |span| {
+            let s = Settings { line_span: span, ..Settings::default() };
+            let q = query(
+                Subject::Box {
+                    frame: frame(45.0, 1500.0, 10.0, 10.0, 0.0),
+                    bounds: None,
+                    u: Anchors { min: false, mid: false, max: true },
+                    v: Anchors::NONE,
+                    own: &[],
+                },
+                &s,
+            );
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            r
+        };
+        let every = run_with(LineSpan::Every);
+        let nearest = run_with(LineSpan::Nearest);
+        assert_eq!(every.work.line_steps, nearest.work.line_steps, "one entry either way");
+        let seg = |r: &craft_snap::Snapped| {
+            r.marks
+                .iter()
+                .find_map(|m| {
+                    if let Mark::Line { segment, count, .. } = m {
+                        Some((segment.p0.y.min(segment.p1.y), segment.p0.y.max(segment.p1.y), *count))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap()
+        };
+        let (el, eh, ec) = seg(&every);
+        let (nl, nh, nc) = seg(&nearest);
+        assert!(el <= 0.0 && eh >= 299_998.0 && ec == 100_000, "{el} {eh} {ec}");
+        assert!(nl >= 1490.0 && nh <= 1520.0 && nc == 100_000, "the segment reaches the member by the subject only: {nl} {nh}");
+        let _ = Cuts::default();
     }
 }

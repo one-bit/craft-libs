@@ -24,7 +24,6 @@ pub(crate) struct AngleHit {
     pub delta: f64,
     pub to: f64,
     pub prio: u8,
-    pub step: Option<(f64, f64)>,
 }
 
 /// `x` turned into `[-p/2, p/2)` by whole periods.
@@ -67,7 +66,7 @@ fn lattice_hit(co: &Coincide, raw: f64, step: (f64, f64), kind: Kind, prio: u8) 
     let to = step.1 + k * step.0;
     let delta = to - raw;
     let usable = k.is_finite() && to.is_finite() && delta.is_finite() && on_lattice(to, step.0, step.1, tolerance(co, to, step.1));
-    usable.then_some(AngleHit { kind, id: None, delta, to, prio, step: Some(step) })
+    usable.then_some(AngleHit { kind, id: None, delta, to, prio })
 }
 
 /// The match candidates near the raw angle: the nearest below and above it, and across the wrap.
@@ -84,7 +83,7 @@ fn matches(cx: &mut Ctx<'_>, raw: f64, lim: f64, hard: Option<(f64, f64)>) -> Op
         .filter(|(d, _, to)| d.is_finite() && to.is_finite() && d.abs() <= lim)
         .filter(|(_, _, to)| hard.is_none_or(|(st, z)| on_lattice(*to, st, z, tolerance(&co, *to, z))))
         .min_by(|a, b| a.0.abs().total_cmp(&b.0.abs()).then(a.1.cmp(&b.1)))?;
-    Some(AngleHit { kind: Kind::Angle, id: Some(best.1), delta: best.0, to: best.2, prio: cx.rule(Kind::Angle).priority, step: None })
+    Some(AngleHit { kind: Kind::Angle, id: Some(best.1), delta: best.0, to: best.2, prio: cx.rule(Kind::Angle).priority })
 }
 
 /// Turns by a handle.
@@ -107,10 +106,10 @@ pub(crate) fn solve_rotate(cx: &mut Ctx<'_>, raw: f64, radius: f64, step: Option
                 return Solution::new();
             }
         }
-    } else if let Some(h) = step.and_then(|st| lattice_hit(&co, raw, st, Kind::AngleStep, cx.rule(Kind::AngleStep).priority)) {
-        if limit(cx, Kind::AngleStep, radius).is_some_and(|l| h.delta.abs() <= l) {
-            cands.push(h);
-        }
+    } else if let Some(h) = step.and_then(|st| lattice_hit(&co, raw, st, Kind::AngleStep, cx.rule(Kind::AngleStep).priority))
+        && limit(cx, Kind::AngleStep, radius).is_some_and(|l| h.delta.abs() <= l)
+    {
+        cands.push(h);
     }
     let order = |a: &&AngleHit, b: &&AngleHit| {
         let dist = |x: &AngleHit, y: &AngleHit| {

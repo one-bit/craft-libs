@@ -11,7 +11,7 @@ use crate::kind::Kind;
 use crate::moves::{box_probes, point_probes};
 use crate::query::Subject;
 use crate::result::Mark;
-use crate::settings::{MarkRule, SizeAxes};
+use crate::settings::{LineSpan, MarkRule, SizeAxes};
 use crate::solve::{HitRec, Solution};
 
 /// The lines one probe's sides lie on at one place.
@@ -20,6 +20,9 @@ struct Group {
     kinds: Vec<Kind>,
     first: Option<Id>,
     count: u32,
+    /// The extents of the lines found, and of the subject's sides on this line.
+    spans: Vec<(f64, f64)>,
+    ext: (f64, f64),
     lo: f64,
     hi: f64,
     hit: bool,
@@ -47,12 +50,22 @@ fn is_hit(sol: &Solution, probe: &Probe, c: f64, cx: &Ctx<'_>) -> bool {
 fn groups_of(cx: &mut Ctx<'_>, sol: &Solution, probe: &Probe) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
     for ps in &probe.sides {
-        for f in lines_find(cx, probe.angle, ps.offset, ps.side, true) {
+        for f in lines_find(cx, probe.angle, ps.offset, ps.side, Some((ps.lo, ps.hi))) {
             let at = match groups.iter().position(|g| cx.co.same(g.c, f.c)) {
                 Some(i) => i,
                 None => {
                     let hit = is_hit(sol, probe, f.c, cx);
-                    groups.push(Group { c: f.c, kinds: Vec::new(), first: None, count: 0, lo: f64::INFINITY, hi: f64::NEG_INFINITY, hit });
+                    groups.push(Group {
+                        c: f.c,
+                        kinds: Vec::new(),
+                        first: None,
+                        count: 0,
+                        spans: Vec::new(),
+                        ext: (f64::INFINITY, f64::NEG_INFINITY),
+                        lo: f64::INFINITY,
+                        hi: f64::NEG_INFINITY,
+                        hit,
+                    });
                     groups.len() - 1
                 }
             };
@@ -65,13 +78,32 @@ fn groups_of(cx: &mut Ctx<'_>, sol: &Solution, probe: &Probe) -> Vec<Group> {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (a, b) => a.or(b),
             };
-            g.lo = g.lo.min(f.lo).min(ps.lo);
-            g.hi = g.hi.max(f.hi).max(ps.hi);
+            g.ext = (g.ext.0.min(ps.lo), g.ext.1.max(ps.hi));
+            if f.lo <= f.hi {
+                g.spans.push((f.lo, f.hi));
+            }
         }
     }
     groups.sort_by(|a, b| a.c.total_cmp(&b.c));
+    let nearest = cx.s.line_span == LineSpan::Nearest;
     for g in &mut groups {
         g.kinds.sort();
+        // Every target on the line, or the one nearest the subject and no other.
+        let gap = |s: &(f64, f64)| {
+            if s.1 < g.ext.0 {
+                g.ext.0 - s.1
+            } else if s.0 > g.ext.1 {
+                s.0 - g.ext.1
+            } else {
+                0.0
+            }
+        };
+        let chosen: Vec<(f64, f64)> = if nearest {
+            g.spans.iter().copied().min_by(|a, b| gap(a).total_cmp(&gap(b)).then(a.0.total_cmp(&b.0))).into_iter().collect()
+        } else {
+            g.spans.clone()
+        };
+        (g.lo, g.hi) = chosen.iter().fold(g.ext, |e, s| (e.0.min(s.0), e.1.max(s.1)));
     }
     groups
 }
@@ -102,11 +134,11 @@ pub(crate) fn own_side(frame: &TurnedBox, width: bool) -> Line {
 
 /// The widths or heights of other objects that equal `value`: how many, and the one named (the hit's, else the lowest id).
 fn equal_lengths(cx: &mut Ctx<'_>, value: f64, width: bool, hit: Option<Id>) -> (u32, Option<Id>) {
-    let t = cx.t;
+    let (widths, heights) = cx.lengths();
     let arrays: Vec<&[crate::index::Length]> = match (cx.s.size_axes, width) {
-        (SizeAxes::EitherAxis, _) => vec![t.widths(&mut cx.work.made), t.heights(&mut cx.work.made)],
-        (SizeAxes::SameAxis, true) => vec![t.widths(&mut cx.work.made)],
-        (SizeAxes::SameAxis, false) => vec![t.heights(&mut cx.work.made)],
+        (SizeAxes::EitherAxis, _) => vec![widths, heights],
+        (SizeAxes::SameAxis, true) => vec![widths],
+        (SizeAxes::SameAxis, false) => vec![heights],
     };
     let cap = u64::from(cx.budget().line_steps);
     let (mut count, mut named) = (0u32, None::<Id>);
@@ -118,14 +150,11 @@ fn equal_lengths(cx: &mut Ctx<'_>, value: f64, width: bool, hit: Option<Id>) -> 
             if !Work::charge(&mut cx.work.line_steps, cap, 1, &mut cx.work.cut, &mut cx.work.truncated, Cuts::LINE_STEPS) {
                 break;
             }
-            if !cx.in_scope(l.id) {
-                continue;
-            }
             count = count.saturating_add(1);
             named = Some(named.map_or(l.id, |n| n.min(l.id)));
         }
     }
-    (count, hit.filter(|h| named.is_some() && count > 0).or(named))
+    (count, hit.filter(|_| named.is_some() && count > 0).or(named))
 }
 
 /// The size marks of a resized box: for each own axis that a moving side changes, the final length against other objects' equal lengths.
@@ -249,7 +278,7 @@ pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
             }
             out.push(m);
         }
-        if let (Subject::Box { .. }, Some(f)) = (cx.q.subject, sol.frame) {
+        if let (Subject::Box { .. } | Subject::Nudge { .. }, Some(f)) = (cx.q.subject, sol.frame) {
             let gaps = crate::spacing::gap_marks(cx, sol, &f, &probe);
             let gaps = gaps.into_iter().filter(|m| cx.s.marks != MarkRule::HitsOnly || matches!(m, Mark::Gap { hit: true, .. })).collect();
             let n = out.len();

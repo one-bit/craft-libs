@@ -91,7 +91,7 @@ mod nudges {
     use crate::common::*;
 
     fn nudge(f: craft_snap::TurnedBox, axis: Axis, forward: bool, step: f64) -> Subject<'static> {
-        Subject::Nudge { frame: f, axis, forward, step }
+        Subject::Nudge { frame: f, bounds: None, axis, forward, reach: craft_snap::NudgeReach::Within(step), fallback: step }
     }
 
     #[test]

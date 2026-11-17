@@ -8,7 +8,7 @@ use crate::ctx::{Cand, Ctx};
 use crate::frame::{Axis, Direction, TurnedBox};
 use crate::marks;
 use crate::moves;
-use crate::query::{Constraint, Detail, Query, Rounding, Subject};
+use crate::query::{Constraint, Detail, NudgeReach, Query, Rounding, Subject};
 use crate::resize;
 use crate::result::{Hit, Snapped};
 use crate::targets::Targets;
@@ -56,7 +56,15 @@ fn refusal(q: &Query<'_>) -> Option<Refusal> {
         Subject::Rotate { pivot, angle, radius, step } => {
             pivot.is_finite() && angle.is_finite() && radius.is_finite() && step.is_none_or(|(s, z)| s.is_finite() && s > 0.0 && z.is_finite())
         }
-        Subject::Nudge { frame, step, .. } => frame.is_valid() && step.is_finite() && step >= 0.0,
+        Subject::Nudge { frame, reach, fallback, .. } => {
+            frame.is_valid()
+                && fallback.is_finite()
+                && fallback >= 0.0
+                && match reach {
+                    NudgeReach::Within(s) => s.is_finite() && s >= 0.0,
+                    NudgeReach::Anywhere => true,
+                }
+        }
     };
     let constraint_ok = match q.constraint {
         Constraint::None | Constraint::Centre | Constraint::Axis(_) => true,
@@ -79,61 +87,15 @@ pub fn snap(targets: &Targets, query: &Query<'_>, detail: &mut dyn Detail) -> Sn
         cx.work.refused = Some(why);
         return Snapped::empty(cx.work);
     }
-    prefetch_bounds(&mut cx, detail);
     let sol = match query.subject {
         Subject::Point { at, base } => moves::solve_point(&mut cx, detail, at, base),
-        Subject::Box { frame, u, v, own } => moves::solve_box(&mut cx, detail, frame, u, v, own),
+        Subject::Box { frame, u, v, own, .. } => moves::solve_box(&mut cx, detail, frame, u, v, own),
         Subject::Edges { frame, moving } => resize::solve_edges(&mut cx, detail, frame, moving),
         Subject::Rotate { angle, radius, step, .. } => crate::angle::solve_rotate(&mut cx, angle, radius, step),
-        Subject::Nudge { frame, axis, forward, step } => crate::nudge::solve_nudge(&mut cx, frame, axis, forward, step),
+        Subject::Nudge { frame, axis, forward, reach, fallback, .. } => crate::nudge::solve_nudge(&mut cx, frame, axis, forward, reach, fallback),
     };
     let marks = marks::derive(&mut cx, &sol);
     finish(cx.work, sol, marks)
-}
-
-/// With `BoxRound::Paths`, asks the detail source for the box round the outline of each turned object near the subject, once, charged to the
-/// outlines budget. An object it has none for keeps the box round its corners (or the one the app gave the builder).
-fn prefetch_bounds(cx: &mut Ctx<'_>, detail: &mut dyn Detail) {
-    if cx.s.box_round != crate::settings::BoxRound::Paths {
-        return;
-    }
-    let frame = match cx.q.subject {
-        Subject::Box { frame, .. } | Subject::Edges { frame, .. } | Subject::Nudge { frame, .. } => frame,
-        _ => return,
-    };
-    let region = cx.t.rel_bounds(&frame);
-    let r = cx.s.spacing_reach;
-    let along = (r.times * frame.size.width.max(frame.size.height)).max(r.at_least);
-    let across = cx.s.align_reach.map_or(0.0, |a| a.document(cx.zoom)).min(1.0e300);
-    let reach =
-        along.max(if across.is_finite() { across } else { 0.0 }).max(cx.reach(crate::kind::Kind::Edge)).max(cx.reach(crate::kind::Kind::Centre));
-    let window = crate::ctx::grown(region, reach);
-    let t = cx.t;
-    let (limit, visits) = (u64::from(cx.budget().candidates) as usize, u64::from(cx.budget().window_visits));
-    let g = t.object_grid(&mut cx.work.made).gather(&window, limit, visits);
-    cx.work.examined = cx.work.examined.saturating_add(g.examined);
-    cx.work.visited = cx.work.visited.saturating_add(g.visited);
-    let cap = u64::from(cx.budget().outlines);
-    let mut got: Vec<(u32, kurbo::Rect)> = Vec::new();
-    for c in &g.items {
-        let Some(o) = t.objects.get(c.index as usize) else { continue };
-        if !o.parts.detail || o.frame.quarter(cx.co.angle).is_some() {
-            continue;
-        }
-        if !crate::budget::Work::charge(&mut cx.work.outlines, cap, 1, &mut cx.work.cut, &mut cx.work.truncated, crate::budget::Cuts::OUTLINES) {
-            break;
-        }
-        let q = cx.q;
-        let found = {
-            let mut spend = crate::budget::Spend { work: &mut cx.work, budget: &q.budget };
-            detail.bounds(o.id, &mut spend)
-        };
-        if let Some(b) = found.filter(|b| [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite())) {
-            got.push((c.index, b));
-        }
-    }
-    got.sort_by_key(|p| p.0);
-    cx.path_bounds = got;
 }
 
 fn finish(mut work: Work, sol: Solution, marks: Vec<crate::result::Mark>) -> Snapped {

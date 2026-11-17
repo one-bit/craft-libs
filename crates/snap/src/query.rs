@@ -22,14 +22,25 @@ pub enum Subject<'a> {
     /// A pen click, a connector's end, the press of a draw. `base`: the previous point, for tangent and perpendicular.
     Point { at: Point, base: Option<Point> },
     /// A move. `u` and `v`: which of its own sides snap. `own`: places of the moving objects pulled with the box (their connection points).
-    Box { frame: TurnedBox, u: crate::frame::Anchors, v: crate::frame::Anchors, own: &'a [Point] },
+    /// `bounds`: the box it aligns by on the page axes when the app knows a tighter one than the box round the frame's corners (for a turned
+    /// shape, round its paths): the same as on `Object`. It moves with the subject.
+    Box { frame: TurnedBox, bounds: Option<kurbo::Rect>, u: crate::frame::Anchors, v: crate::frame::Anchors, own: &'a [Point] },
     /// A resize, or the dragged corner of a draw (the fixed corner is where the press landed). Its sides move along its own axes.
     Edges { frame: TurnedBox, moving: Edges },
     /// A turn by a handle. `angle`: what the pointer gives, radians. `radius`: the pointer's distance from the pivot. `step`: a soft lattice of
     /// angles `(step, zero)` (kind `AngleStep`), when the app wants one.
     Rotate { pivot: Point, angle: f64, radius: f64, step: Option<(f64, f64)> },
-    /// A key press: along a page axis to the first target strictly ahead within `step`, else by `step`.
-    Nudge { frame: TurnedBox, axis: Axis, forward: bool, step: f64 },
+    /// A key press along a page axis: to the first target strictly ahead, within `reach`, else by `fallback`. `bounds` as on `Box`.
+    Nudge { frame: TurnedBox, bounds: Option<kurbo::Rect>, axis: Axis, forward: bool, reach: NudgeReach, fallback: f64 },
+}
+
+/// How far a nudge looks for a target.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NudgeReach {
+    /// Only a target within this distance (one step) stops the key; with none it moves by `fallback`, which is the same step.
+    Within(f64),
+    /// The next snap place in the key's direction, however far; with none it moves by `fallback` (an app's one ruler tick, say).
+    Anywhere,
 }
 
 /// What a resize keeps fixed when the proportions are kept.
@@ -100,10 +111,10 @@ pub struct Query<'a> {
     pub rounding: Rounding,
     /// Grids and ruler ticks, each with its kind.
     pub lattices: &'a [Lattice],
+    /// The objects the person sees, for the kinds whose scope is the view (`KindRule::scope`): made by `Targets::in_view`. `None`: no view, and
+    /// those kinds look at every object.
+    pub view: Option<&'a crate::targets::ViewIndex>,
     pub budget: Budget,
-    /// The box round the subject's outline, in the app's frame, when it differs from the box round its corners: used for the page's
-    /// directions when `Settings::box_round` says `Paths`. It moves with the subject.
-    pub bounds: Option<kurbo::Rect>,
 }
 
 /// Places and outlines an app builds only for the few objects near the subject.
@@ -112,11 +123,6 @@ pub trait Detail {
     fn points(&mut self, id: Id, spend: &mut Spend<'_>, out: &mut Vec<(Point, Kind, u32)>);
     /// The outline of object `id`, for vertex, midpoint, nearest, intersection, tangent and perpendicular snaps.
     fn outline(&mut self, id: Id, spend: &mut Spend<'_>, out: &mut Vec<BezPath>);
-    /// The box round the outline of object `id`, in the app's frame, for the objects near the subject when `Settings::box_round` says `Paths`.
-    /// It is asked once for each object near, charged to `Budget::outlines`, and the source charges what reading cost.
-    fn bounds(&mut self, _id: Id, _spend: &mut Spend<'_>) -> Option<kurbo::Rect> {
-        None
-    }
 }
 
 /// For apps that give everything to the builder.

@@ -180,16 +180,16 @@ fn crossings(cx: &mut Ctx<'_>, w: &mut Weigh<'_>, sets: &[Vec<kurbo::Line>], pro
 }
 
 /// The places of one candidate object: its corners and side middles, and the detail source's places and outlines.
-fn from_object(
-    cx: &mut Ctx<'_>,
-    w: &mut Weigh<'_>,
-    detail: &mut dyn Detail,
-    o: &ObjectEntry,
-    asked: &mut u32,
-    sets: &mut Vec<Vec<kurbo::Line>>,
-    probe: &Rect,
+/// What the objects near are scanned for: how many outlines were asked of the detail source, the pieces of those outlines, the window and the
+/// base point of a tangent or perpendicular.
+struct Scan {
+    asked: u32,
+    sets: Vec<Vec<kurbo::Line>>,
+    probe: Rect,
     base: Option<Point>,
-) {
+}
+
+fn from_object(cx: &mut Ctx<'_>, w: &mut Weigh<'_>, detail: &mut dyn Detail, o: &ObjectEntry, scan: &mut Scan) {
     let c = o.frame.corners();
     if o.parts.corners {
         c.iter().for_each(|p| w.offer(cx, Gathered { kind: Kind::Corner, id: Some(o.id), number: None, at: *p }));
@@ -204,11 +204,11 @@ fn from_object(
     let outlines_cap = cx.budget().outlines;
     let wants_outline =
         [Kind::Vertex, Kind::Midpoint, Kind::Nearest, Kind::Intersection, Kind::Tangent, Kind::Perpendicular].iter().any(|k| cx.rule(*k).on);
-    if *asked >= outlines_cap {
+    if scan.asked >= outlines_cap {
         cx.work.cut(Cuts::OUTLINES);
         return;
     }
-    *asked += 1;
+    scan.asked += 1;
     cx.work.outlines += 1;
     let mut pts = Vec::new();
     {
@@ -221,7 +221,7 @@ fn from_object(
     }
     if wants_outline {
         let paths = paths_of(cx, detail, o.id);
-        osnaps(cx, w, o.id, &paths, base, probe, sets);
+        osnaps(cx, w, o.id, &paths, scan.base, &scan.probe, &mut scan.sets);
     }
 }
 
@@ -266,14 +266,14 @@ pub(crate) fn solve_places(cx: &mut Ctx<'_>, detail: &mut dyn Detail, subject: &
     // The objects near: their boxes' places, and what the detail source gives.
     let g = t.object_grid(&mut cx.work.made).gather(&window, limit, visits);
     note(cx, &g);
-    let (mut asked, mut sets) = (0u32, Vec::new());
+    let mut scan = Scan { asked: 0, sets: Vec::new(), probe: window, base };
     for c in &g.items {
         if let Some(o) = t.objects.get(c.index as usize) {
-            from_object(cx, &mut w, detail, o, &mut asked, &mut sets, &window, base);
+            from_object(cx, &mut w, detail, o, &mut scan);
         }
     }
     // Outlines the app gave the builder for objects that are not in the grid's window are read only through their object.
-    crossings(cx, &mut w, &sets, &window);
+    crossings(cx, &mut w, &scan.sets, &window);
     w.best
 }
 

@@ -116,6 +116,15 @@ impl Coincide {
     }
 }
 
+/// The side of a box as it is along the folded direction of its line: where folding turned the normal round, low and high swap.
+pub fn canon_side(side: Side, flipped: bool) -> Side {
+    match (side, flipped) {
+        (Side::Min, true) => Side::Max,
+        (Side::Max, true) => Side::Min,
+        (s, _) => s,
+    }
+}
+
 /// The unit vector at `angle`, exact at the multiples of a quarter turn (and within `1e-12` of them).
 pub fn unit(angle: f64) -> Vec2 {
     let q = angle / FRAC_PI_2;

@@ -28,11 +28,9 @@ pub mod targets;
 
 pub use budget::{Budget, Cuts, Made, Refusal, Spend, Work};
 pub use frame::{Anchors, Axis, Coincide, Direction, Id, OwnOrBounds, Side, TurnedBox};
-pub use kind::{Kind, KindRule, KindTable, Reach};
-pub use query::{About, Constraint, Detail, Edges, Lattice, NoDetail, Query, Rounding, Subject};
+pub use kind::{Kind, KindRule, KindTable, Reach, Scope};
+pub use query::{About, Constraint, Detail, Edges, Lattice, NoDetail, NudgeReach, Query, Rounding, Subject};
 pub use result::{Broken, Hit, Mark, Snapped};
-pub use settings::{
-    BoxRound, Choose, Frames, MarkRule, Matching, NudgeMode, Places, Settings, SizeAxes, SizeScope, SpacingGaps, SpacingReach, SpacingRow,
-};
+pub use settings::{Choose, Frames, LineSpan, MarkRule, Matching, Places, Settings, SizeAxes, SpacingGaps, SpacingReach, SpacingRow};
 pub use solve::snap;
-pub use targets::{BuildReport, Limits, Object, Parts, Refused, Targets, TargetsBuilder};
+pub use targets::{BuildReport, Limits, Object, Parts, Refused, Targets, TargetsBuilder, ViewIndex};

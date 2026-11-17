@@ -97,7 +97,7 @@ pub struct Object {
     /// Its box, turned or not. The box round it (its bounds) is worked out from this, unless `bounds` says otherwise.
     pub frame: TurnedBox,
     /// The box round its outline, when the app has it and it differs from the box round the frame's corners: used for the page's directions
-    /// (its own sides are still the frame's). See [`crate::osnap::path_bounds`].
+    /// (its own sides are still the frame's).
     pub bounds: Option<Rect>,
     /// Its angle for rotation match, when it differs from the frame's (a line's direction, a flipped shape's own turn).
     pub angle: Option<f64>,
@@ -190,9 +190,9 @@ fn raw_of(l: &SideLine, kind: Kind, id: Option<Id>, co: &Coincide) -> RawLine {
     let (angle, flipped) = canon(l.angle, co.angle);
     // A flipped normal reads the same line with its offset changed in sign and its tangent turned round.
     if flipped {
-        RawLine { angle, offset: -l.offset, lo: -l.hi, hi: -l.lo, kind, id, side: Some(l.side) }
+        RawLine { angle, offset: -l.offset, lo: -l.hi, hi: -l.lo, kind, id, side: Some(crate::frame::canon_side(l.side, flipped)) }
     } else {
-        RawLine { angle, offset: l.offset, lo: l.lo, hi: l.hi, kind, id, side: Some(l.side) }
+        RawLine { angle, offset: l.offset, lo: l.lo, hi: l.hi, kind, id, side: Some(crate::frame::canon_side(l.side, flipped)) }
     }
 }
 
@@ -424,6 +424,38 @@ fn median_origin(objects: &[ObjectEntry], points: &[PointEntry]) -> Point {
 /// The most directions of the app's own lines, besides the page's, that a point is aligned along.
 pub(crate) const MAX_APP_DIRECTIONS: usize = 8;
 
+/// The objects that meet a view, with their own widths and heights sorted: made once when the view changes (or once for a command), not for
+/// each query. It is what a size match reads under `Scope::View`.
+#[derive(Clone, Debug, Default)]
+pub struct ViewIndex {
+    view: Rect,
+    pub(crate) widths: Vec<Length>,
+    pub(crate) heights: Vec<Length>,
+    tested: u64,
+}
+
+impl ViewIndex {
+    /// The view it was made for.
+    pub fn view(&self) -> Rect {
+        self.view
+    }
+
+    /// How many bounds were tested to make it: every object's, once.
+    pub fn tested(&self) -> u64 {
+        self.tested
+    }
+
+    /// How many objects are in the view and offer a size.
+    pub fn len(&self) -> usize {
+        self.widths.len()
+    }
+
+    /// Whether no object in the view offers a size.
+    pub fn is_empty(&self) -> bool {
+        self.widths.is_empty()
+    }
+}
+
 /// A set of targets. Build it once per gesture, without the objects that move, and ask it at every pointer move.
 pub struct Targets {
     pub(crate) co: Coincide,
@@ -442,6 +474,21 @@ pub struct Targets {
 }
 
 impl Targets {
+    /// The objects whose bounds meet `view`, with their lengths sorted: one counted scan of every object's bounds and a sort of those in the view.
+    /// A view that is not finite has no object.
+    pub fn in_view(&self, view: Rect) -> ViewIndex {
+        let finite = [view.x0, view.y0, view.x1, view.y1].iter().all(|v| v.is_finite());
+        let meets = |b: Rect| b.x0 <= view.x1 && view.x0 <= b.x1 && b.y0 <= view.y1 && view.y0 <= b.y1;
+        let inside: Vec<&ObjectEntry> =
+            self.objects.iter().filter(|o| finite && o.parts.size && meets(o.bounds.unwrap_or_else(|| o.frame.bounds()))).collect();
+        ViewIndex {
+            view,
+            widths: sorted_lengths(inside.iter().map(|o| Length { length: o.frame.size.width, id: o.id }).collect()),
+            heights: sorted_lengths(inside.iter().map(|o| Length { length: o.frame.size.height, id: o.id }).collect()),
+            tested: self.objects.len() as u64,
+        }
+    }
+
     /// What was kept, refused for numbers that are not finite, refused past a limit, and how many directions and line places there are.
     pub fn report(&self) -> &BuildReport {
         &self.report
@@ -696,7 +743,7 @@ mod tests {
         let t = b.build();
         let r = t.report();
         assert_eq!((r.objects, r.lines, r.points, r.paths, r.path_elements), (2, 3, 1, 1, 2));
-        assert_eq!((r.refused_not_finite, r.refused_not_a_rectangle), (6, 1 + 0));
+        assert_eq!((r.refused_not_finite, r.refused_not_a_rectangle), (6, 1));
         assert!(r.refused_over_limit >= 5);
     }
 

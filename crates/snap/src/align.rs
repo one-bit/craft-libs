@@ -13,7 +13,7 @@ use crate::ctx::{Cand, Ctx, Probe, grown};
 use crate::frame::{Id, Side};
 use crate::index::{DirTable, Entry, canon, log_steps};
 use crate::kind::{Kind, Reach};
-use crate::settings::Matching;
+use crate::settings::{LineSpan, Matching};
 use crate::targets::{side_kind, side_lines};
 
 /// One line found near a side.
@@ -23,8 +23,6 @@ pub(crate) struct Found {
     pub id: Option<Id>,
     pub c: f64,
     pub count: u32,
-    /// Which side of its box the line is, when it is one.
-    pub side: Option<Side>,
     /// The extent along the line (empty, `lo > hi`, for a line that runs on for ever).
     pub lo: f64,
     pub hi: f64,
@@ -62,7 +60,7 @@ fn entries_on<'e>(cx: &mut Ctx<'_>, entries: &'e [Entry], s: f64) -> Vec<&'e Ent
 }
 
 /// The lines of each kind in one table: the nearest to the offset `s` in the direction `angle`, or, with `on`, all those at `s`.
-fn from_table(cx: &mut Ctx<'_>, table: &DirTable, angle: f64, s: f64, side: Side, on: bool, out: &mut Vec<Found>) {
+fn from_table(cx: &mut Ctx<'_>, table: &DirTable, angle: f64, s: f64, side: Side, on: Option<(f64, f64)>, out: &mut Vec<Found>) {
     cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(table.dirs.len()));
     let Some(dir) = table.find(angle, &cx.co) else { return };
     for set in &dir.sets {
@@ -70,12 +68,19 @@ fn from_table(cx: &mut Ctx<'_>, table: &DirTable, angle: f64, s: f64, side: Side
             continue;
         }
         cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(set.entries.len()));
-        let found = |e: &Entry| Found { kind: set.kind, id: e.id, c: e.offset, count: e.count, side: set.side, lo: e.lo, hi: e.hi };
-        if on {
+        let nearest = cx.s.line_span == LineSpan::Nearest;
+        let found = |e: &Entry, ext: Option<(f64, f64)>| {
+            let (lo, hi) = match ext {
+                Some(x) if nearest => set.nearest_span(e, x),
+                _ => (e.lo, e.hi),
+            };
+            Found { kind: set.kind, id: e.id, c: e.offset, count: e.count, lo, hi }
+        };
+        if let Some(ext) = on {
             let list = entries_on(cx, &set.entries, s);
-            out.extend(list.into_iter().map(found));
+            out.extend(list.into_iter().map(|e| found(e, Some(ext))));
         } else {
-            out.extend(set.nearest(s).and_then(|i| set.entries.get(i)).map(found));
+            out.extend(set.nearest(s).and_then(|i| set.entries.get(i)).map(|e| found(e, None)));
         }
     }
 }
@@ -98,7 +103,7 @@ fn from_lattices(cx: &Ctx<'_>, angle: f64, s: f64, side: Side, on: bool, out: &m
         }
         let c = origin + n * pitch - o;
         if !on || cx.co.same(c, s) {
-            out.push(Found { kind: lat.kind, id: None, c, count: 1, side: None, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
+            out.push(Found { kind: lat.kind, id: None, c, count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
         }
     }
 }
@@ -133,15 +138,15 @@ fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Sid
         if !(obj.parts.bounds_lines || obj.parts.own_lines) {
             continue;
         }
-        for l in side_lines(&obj.frame, cx.bounds_of(o_idx), o, &co, obj.parts.own_lines) {
+        for l in side_lines(&obj.frame, obj.bounds, o, &co, obj.parts.own_lines) {
             let (a, flipped) = canon(l.angle, co.angle);
             let x = (a - angle).rem_euclid(PI);
             let kind = side_kind(l.side);
-            if x.min(PI - x) > co.angle || !cx.rule(kind).on || !matches(cx, kind, side, Some(l.side)) {
+            if x.min(PI - x) > co.angle || !cx.rule(kind).on || !matches(cx, kind, side, Some(crate::frame::canon_side(l.side, flipped))) {
                 continue;
             }
             let (c, lo, hi) = if flipped { (-l.offset, -l.hi, -l.lo) } else { (l.offset, l.lo, l.hi) };
-            let found = Found { kind, id: Some(obj.id), c, count: 1, side: Some(l.side), lo, hi };
+            let found = Found { kind, id: Some(obj.id), c, count: 1, lo, hi };
             if on {
                 if co.same(c, s) {
                     best.push(found);
@@ -160,15 +165,15 @@ fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Sid
 
 /// The nearest line of each kind to the offset `s` of a side of the subject in the direction `angle` (with `on`: every line at `s`):
 /// lattices, the app's lines and the objects' lines.
-pub(crate) fn lines_find(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, on: bool) -> Vec<Found> {
+pub(crate) fn lines_find(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, on: Option<(f64, f64)>) -> Vec<Found> {
     let mut out = Vec::new();
-    from_lattices(cx, angle, s, side, on, &mut out);
+    from_lattices(cx, angle, s, side, on.is_some(), &mut out);
     let t = cx.t;
     from_table(cx, &t.app, angle, s, side, on, &mut out);
     match cx.s.align_reach {
         Some(r) if !matches!(r, Reach::Any) => {
             let reach = r.document(cx.zoom);
-            from_near_objects(cx, reach, angle, s, side, on, &mut out);
+            from_near_objects(cx, reach, angle, s, side, on.is_some(), &mut out);
         }
         _ => {
             let table = t.object_lines(&mut cx.work.made);
@@ -207,7 +212,7 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
         let first = if up { n.floor() + 1.0 } else { n.ceil() - 1.0 };
         let k = if cx.co.same(line(first), s) { if up { first + 1.0 } else { first - 1.0 } } else { first };
         if k.is_finite() && k.abs() <= 4_503_599_627_370_496.0 {
-            out.push(Found { kind: lat.kind, id: None, c: line(k), count: 1, side: None, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
+            out.push(Found { kind: lat.kind, id: None, c: line(k), count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
         }
     }
     let t = cx.t;
@@ -226,7 +231,6 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
                 id: e.id,
                 c: e.offset,
                 count: e.count,
-                side: set.side,
                 lo: e.lo,
                 hi: e.hi,
             }));
@@ -242,7 +246,7 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
 
 /// The nearest line of each kind to the offset `s` of a side of the subject in the direction `angle`.
 pub(crate) fn lines_near(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side) -> Vec<Found> {
-    lines_find(cx, angle, s, side, false)
+    lines_find(cx, angle, s, side, None)
 }
 
 /// The candidates of every side of one probe.
@@ -274,9 +278,7 @@ pub(crate) fn probe_cands(cx: &mut Ctx<'_>, probe: &Probe, free: Free) -> Vec<Ca
                 s: ps.offset,
                 d: travel,
                 t: travel.abs(),
-                rate: 1.0,
                 pt: 0,
-                count: f.count,
             });
         }
     }
@@ -302,8 +304,8 @@ mod tests {
             constraint: Constraint::None,
             rounding: Rounding::None,
             lattices: &[],
+            view: None,
             budget: Budget::default(),
-            bounds: None,
         }
     }
 
@@ -332,7 +334,7 @@ mod tests {
         let mut cx = Ctx::new(&t, &q);
         let at = 96.0 - cx.o.x;
         let mut found = lines_near(&mut cx, 0.0, at, Side::Min);
-        found.sort_by(|a, b| a.kind.cmp(&b.kind));
+        found.sort_by_key(|a| a.kind);
         let kinds: Vec<(Kind, f64)> = found.iter().map(|f| (f.kind, f.c + cx.o.x)).collect();
         assert!(kinds.contains(&(Kind::Guide, 7.0)));
         assert!(kinds.contains(&(Kind::Edge, 95.0)), "{kinds:?}");

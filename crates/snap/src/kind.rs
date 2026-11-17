@@ -139,12 +139,21 @@ impl Reach {
     }
 }
 
-/// The rule for one kind: on or off, how far it pulls, its priority (lower wins).
+/// Which objects a kind looks at: all of them (the default), or those whose bounds meet the query's view. Only `Kind::Size` reads it in this
+/// version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    All,
+    View,
+}
+
+/// The rule for one kind: on or off, how far it pulls, its priority (lower wins), and which objects it looks at.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct KindRule {
     pub on: bool,
     pub reach: Reach,
     pub priority: u8,
+    pub scope: Scope,
 }
 
 const KINDS: usize = 21;
@@ -162,7 +171,7 @@ impl KindTable {
         if let Some((_, r)) = self.custom.iter().find(|(k, _)| *k == kind) {
             return *r;
         }
-        self.rules.get(kind.slot()).copied().unwrap_or(KindRule { on: false, reach: Reach::Screen(0.0), priority: u8::MAX })
+        self.rules.get(kind.slot()).copied().unwrap_or(KindRule { on: false, reach: Reach::Screen(0.0), priority: u8::MAX, scope: Scope::All })
     }
 
     /// Sets the rule of `kind`. For `Line(n)` and `Point(n)` this is the rule of that number alone; the number-less rule is
@@ -195,9 +204,9 @@ impl KindTable {
 
 impl Default for KindTable {
     fn default() -> Self {
-        let near = |priority| KindRule { on: true, reach: Reach::Screen(6.0), priority };
-        let any = |on, priority| KindRule { on, reach: Reach::Any, priority };
-        let off = |priority| KindRule { on: false, reach: Reach::Screen(6.0), priority };
+        let near = |priority| KindRule { on: true, reach: Reach::Screen(6.0), priority, scope: Scope::All };
+        let any = |on, priority| KindRule { on, reach: Reach::Any, priority, scope: Scope::All };
+        let off = |priority| KindRule { on: false, reach: Reach::Screen(6.0), priority, scope: Scope::All };
         let mut t = KindTable { rules: [near(0); KINDS], custom: Vec::new() };
         let table: [(Kind, KindRule); KINDS] = [
             (Kind::Intersection, near(0)),
@@ -269,14 +278,14 @@ mod tests {
     #[test]
     fn a_numbered_kind_has_its_own_rule_or_the_shared_one() {
         let mut t = KindTable::default();
-        t.set(Kind::Line(4), KindRule { on: false, reach: Reach::Document(1.0), priority: 77 });
+        t.set(Kind::Line(4), KindRule { on: false, reach: Reach::Document(1.0), priority: 77, scope: Scope::All });
         assert_eq!(t.rule(Kind::Line(4)).priority, 77);
         assert_eq!(t.rule(Kind::Line(5)).priority, 4);
-        t.set_all_lines(KindRule { on: true, reach: Reach::Any, priority: 3 });
+        t.set_all_lines(KindRule { on: true, reach: Reach::Any, priority: 3, scope: Scope::All });
         assert_eq!((t.rule(Kind::Line(5)).priority, t.rule(Kind::Line(4)).priority), (3, 77));
-        t.set(Kind::Line(4), KindRule { on: true, reach: Reach::Any, priority: 1 });
+        t.set(Kind::Line(4), KindRule { on: true, reach: Reach::Any, priority: 1, scope: Scope::All });
         assert_eq!(t.rule(Kind::Line(4)).priority, 1);
-        t.set_all_points(KindRule { on: true, reach: Reach::Any, priority: 0 });
+        t.set_all_points(KindRule { on: true, reach: Reach::Any, priority: 0, scope: Scope::All });
         assert_eq!(t.rule(Kind::Point(200)).priority, 0);
         assert!(
             Kind::Guide.is_line() && !Kind::Guide.is_place() && Kind::Point(1).is_place() && !Kind::Spacing.is_line() && !Kind::Spacing.is_place()

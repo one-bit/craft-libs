@@ -122,18 +122,6 @@ fn flagged(m: &Edges) -> Vec<SideId> {
         .collect()
 }
 
-/// What the settings and the query make of the constraint of a resize: a corner drag keeps its proportions when the settings say so.
-pub(crate) fn effective_constraint(s: &crate::settings::Settings, c: Constraint, moving: &Edges, frame: &TurnedBox) -> Constraint {
-    let one = |a: bool, b: bool| a != b;
-    let corner = one(moving.u_min, moving.u_max) && one(moving.v_min, moving.v_max);
-    match c {
-        Constraint::None if s.corners_keep_proportions && corner && frame.size.height > 0.0 => {
-            Constraint::Aspect { ratio: frame.size.width / frame.size.height, about: About::Fixed }
-        }
-        other => other,
-    }
-}
-
 /// The sides whose points are lined up: the moving ones, and with the sides moving together, both of each axis that has one.
 fn carrying(cx: &Ctx<'_>, moving: &Edges) -> Vec<SideId> {
     let sides = flagged(moving);
@@ -152,7 +140,7 @@ fn carrying(cx: &Ctx<'_>, moving: &Edges) -> Vec<SideId> {
 }
 
 /// The degrees the constraint leaves the moving sides.
-fn degrees(cx: &Ctx<'_>, own: &Own, moving: &Edges, frame: &TurnedBox) -> Vec<Degree> {
+fn degrees(cx: &Ctx<'_>, own: &Own, moving: &Edges) -> Vec<Degree> {
     let sides = flagged(moving);
     let e = own.ext;
     let carry = |ids: &[SideId], w: &dyn Fn(SideId, Vec2) -> Vec2| -> Vec<(Vec2, Vec2, SideId, u8)> {
@@ -161,7 +149,7 @@ fn degrees(cx: &Ctx<'_>, own: &Own, moving: &Edges, frame: &TurnedBox) -> Vec<De
             .map(|(p, id, i)| (p, w(id, p), id, i))
             .collect()
     };
-    match effective_constraint(cx.s, cx.q.constraint, moving, frame) {
+    match cx.q.constraint {
         Constraint::Centre => {
             let mut out = Vec::new();
             for (is_u, ids) in [(true, [SideId::UMin, SideId::UMax]), (false, [SideId::VMin, SideId::VMax])] {
@@ -232,14 +220,15 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
     let mut out = Vec::new();
     for (p0, w, id, idx) in &deg.carried {
         for (angle, family) in dirs {
-            let (a, _) = crate::index::canon(*angle, cx.co.angle);
+            let (a, flipped) = crate::index::canon(*angle, cx.co.angle);
+            let label = crate::frame::canon_side(side_label(*id), flipped);
             let n = crate::frame::unit(a);
             let nw = n.dot(*w);
             if nw.abs() < 1.0e-12 {
                 continue;
             }
             let s = n.dot(*p0);
-            for f in lines_near(cx, a, s, side_label(*id)) {
+            for f in lines_near(cx, a, s, label) {
                 let g = (f.c - s) / nw;
                 let travel = g.abs() * w.hypot();
                 if !g.is_finite() || !cx.pulls(f.kind, travel) || !deg.kind.valid(own.ext, g) {
@@ -250,16 +239,14 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
                     id: f.id,
                     prio: cx.rule(f.kind).priority,
                     reach: cx.reach(f.kind),
-                    side: side_label(*id),
+                    side: label,
                     own: *family,
                     angle: a,
                     c: f.c,
                     s,
                     d: g,
                     t: travel,
-                    rate: nw,
                     pt: side_code(*id) * 4 + idx,
-                    count: f.count,
                 });
             }
         }
@@ -268,34 +255,15 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
     out
 }
 
-/// The length in a sorted array nearest to `len` whose object counts under the scope of the settings. With a view, the walk goes out from the
-/// insertion point past the objects that are outside it, charged to `line_steps` and cut there.
-pub(crate) fn nearest_length(cx: &mut Ctx<'_>, arr: &[crate::index::Length], len: f64) -> Option<crate::index::Length> {
+/// The length in a sorted array nearest to `len`, within one bisection: one of the two beside its insertion point.
+fn nearest_length(arr: &[crate::index::Length], len: f64) -> Option<crate::index::Length> {
     let i = arr.partition_point(|l| l.length < len);
-    let (below, above) = arr.split_at(i.min(arr.len()));
-    let cap = u64::from(cx.budget().line_steps);
-    let mut found: Vec<crate::index::Length> = Vec::new();
-    for side in [0, 1] {
-        let list: Box<dyn Iterator<Item = &crate::index::Length> + '_> =
-            if side == 0 { Box::new(below.iter().rev()) } else { Box::new(above.iter()) };
-        for l in list {
-            if !crate::budget::Work::charge(
-                &mut cx.work.line_steps,
-                cap,
-                1,
-                &mut cx.work.cut,
-                &mut cx.work.truncated,
-                crate::budget::Cuts::LINE_STEPS,
-            ) {
-                break;
-            }
-            if cx.in_scope(l.id) {
-                found.push(*l);
-                break;
-            }
-        }
-    }
-    found.into_iter().min_by(|a, b| (a.length - len).abs().total_cmp(&(b.length - len).abs()).then(a.id.cmp(&b.id)))
+    [i.checked_sub(1), Some(i)]
+        .into_iter()
+        .flatten()
+        .filter_map(|j| arr.get(j))
+        .min_by(|a, b| (a.length - len).abs().total_cmp(&(b.length - len).abs()).then(a.id.cmp(&b.id)))
+        .copied()
 }
 
 /// The size candidates of a degree: other objects' own widths and heights, by bisection within the reach.
@@ -318,7 +286,7 @@ fn size_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree) -> Vec<Cand> {
             vec![(true, w, w, travel), (false, h, h, travel)]
         }
     };
-    let (widths, heights) = (cx.t.widths(&mut cx.work.made), cx.t.heights(&mut cx.work.made));
+    let (widths, heights) = cx.lengths();
     let mut out = Vec::new();
     for (is_w, len, rate, per_g) in changes {
         let arrays: Vec<&[crate::index::Length]> = match (cx.s.size_axes, is_w) {
@@ -328,7 +296,7 @@ fn size_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree) -> Vec<Cand> {
         };
         for arr in arrays {
             cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(crate::index::log_steps(arr.len()));
-            let Some(m) = nearest_length(cx, arr, len) else { continue };
+            let Some(m) = nearest_length(arr, len) else { continue };
             let g = (m.length - len) / rate;
             let travel = g.abs() * per_g;
             if !(g.is_finite() && cx.pulls(Kind::Size, travel) && deg.kind.valid(own.ext, g)) {
@@ -346,9 +314,7 @@ fn size_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree) -> Vec<Cand> {
                 s: len,
                 d: g,
                 t: travel,
-                rate,
                 pt: 0,
-                count: 1,
             });
         }
     }
@@ -397,7 +363,7 @@ pub(crate) fn solve_edges(cx: &mut Ctx<'_>, _detail: &mut dyn Detail, frame: Tur
     cx.region = cx.t.rel_bounds(&frame);
     let own = Own::of(&frame, cx.o);
     let dirs = directions(cx, &frame);
-    let degs = degrees(cx, &own, &moving, &frame);
+    let degs = degrees(cx, &own, &moving);
     let keep = if matches!(cx.q.rounding, Rounding::None) { 1 } else { 8 };
     let mut lists: Vec<Vec<Cand>> = Vec::new();
     for deg in &degs {
@@ -439,13 +405,19 @@ pub(crate) fn edge_probes(cx: &Ctx<'_>, frame: &TurnedBox, moving: &Edges) -> Ve
     let own = Own::of(frame, cx.o);
     let mut out = Vec::new();
     for (angle, family) in directions(cx, frame) {
-        let (a, _) = crate::index::canon(angle, cx.co.angle);
+        let (a, flipped) = crate::index::canon(angle, cx.co.angle);
         let n = crate::frame::unit(a);
         let t = Vec2::new(-n.y, n.x);
         let mut sides = Vec::new();
         for id in carrying(cx, moving) {
             for p in own.side_points(id, &own.ext) {
-                sides.push(ProbeSide { side: side_label(id), own: family, offset: n.dot(p), lo: t.dot(p), hi: t.dot(p) });
+                sides.push(ProbeSide {
+                    side: crate::frame::canon_side(side_label(id), flipped),
+                    own: family,
+                    offset: n.dot(p),
+                    lo: t.dot(p),
+                    hi: t.dot(p),
+                });
             }
         }
         if !sides.is_empty() {

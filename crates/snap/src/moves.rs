@@ -18,7 +18,7 @@ use crate::frame::{Anchors, OwnOrBounds, Side, TurnedBox, to_page_axes};
 use crate::kind::Kind;
 use crate::places::{PlaceCand, box_places, solve_places};
 use crate::query::{Constraint, Detail, Rounding, Subject};
-use crate::settings::{BoxRound, Choose, Places};
+use crate::settings::{Choose, Places};
 use crate::solve::{HitRec, RoundOn, Solution, round_k};
 use crate::targets::side_lines;
 
@@ -63,10 +63,6 @@ impl Combo {
 
     fn best_prio(&self) -> u8 {
         self.b.map_or(self.a.prio, |b| self.a.prio.min(b.prio))
-    }
-
-    fn reach(&self) -> f64 {
-        self.b.map_or(self.a.reach, |b| self.a.reach.max(b.reach))
     }
 
     fn len(&self) -> f64 {
@@ -176,17 +172,12 @@ fn choose(
     }
 }
 
-/// The box round the subject's outline, moved with the subject, when the settings use outlines and the app gave one.
+/// The box the app gave for the subject's page directions, moved with the subject.
 fn subject_bounds(cx: &Ctx<'_>, frame: &TurnedBox) -> Option<kurbo::Rect> {
-    if cx.s.box_round != BoxRound::Paths {
-        return None;
+    match cx.q.subject {
+        Subject::Box { bounds: Some(b), frame: f, .. } | Subject::Nudge { bounds: Some(b), frame: f, .. } => Some(b + (frame.centre - f.centre)),
+        _ => None,
     }
-    let b = cx.q.bounds?;
-    let from = match cx.q.subject {
-        Subject::Box { frame, .. } | Subject::Nudge { frame, .. } => frame.centre,
-        _ => return None,
-    };
-    Some(b + (frame.centre - from))
 }
 
 /// The probes of a box: the sides of the box round it in the page's directions, and its own sides when it is turned.
@@ -268,6 +259,13 @@ fn decide(cx: &Ctx<'_>, lines: Option<(Vec2, Combo)>, place: Option<PlaceCand>, 
 }
 
 /// Settles a move: its lines, its places, and the rounding of what it falls back to.
+/// The subject's reference place and the min corner of the box round it, before it moves.
+#[derive(Clone, Copy)]
+struct Anchor {
+    refp: Point,
+    minp: Point,
+}
+
 fn settle(
     cx: &mut Ctx<'_>,
     detail: &mut dyn Detail,
@@ -275,9 +273,9 @@ fn settle(
     fr: &Freedom,
     spaced: Option<&TurnedBox>,
     places: (Vec<Point>, Option<Point>),
-    refp: Point,
-    minp: Point,
+    at: Anchor,
 ) -> (Vec2, Vec<HitRec>) {
+    let (refp, minp) = (at.refp, at.minp);
     let lines = solve_probes(cx, ps, fr, spaced, refp, minp);
     let place = if matches!(fr.free, Free::Normal) { solve_places(cx, detail, &places.0, places.1) } else { None };
     match decide(cx, lines, place, fr, refp, minp) {
@@ -293,7 +291,7 @@ pub(crate) fn solve_point(cx: &mut Ctx<'_>, detail: &mut dyn Detail, at: Point, 
     cx.region = kurbo::Rect::from_points(rel, rel);
     let fr = freedom(&cx.q.constraint, at);
     let ps = point_probes(cx, at + fr.base);
-    let (k, hits) = settle(cx, detail, &ps, &fr, None, (vec![at], base), at, at);
+    let (k, hits) = settle(cx, detail, &ps, &fr, None, (vec![at], base), Anchor { refp: at, minp: at });
     let mut sol = Solution::new();
     sol.k = k;
     sol.hits = hits;
@@ -322,7 +320,7 @@ pub(crate) fn solve_box(cx: &mut Ctx<'_>, detail: &mut dyn Detail, frame: Turned
     let ps = box_probes(cx, &moved, u, v);
     let minp = Point::new(frame.bounds().x0, frame.bounds().y0);
     let places = subject_places(cx, &moved, own);
-    let (k, hits) = settle(cx, detail, &ps, &fr, Some(&moved), (places, None), frame.centre, minp);
+    let (k, hits) = settle(cx, detail, &ps, &fr, Some(&moved), (places, None), Anchor { refp: frame.centre, minp });
     let mut sol = Solution::new();
     sol.k = k;
     sol.hits = hits;

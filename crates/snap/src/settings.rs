@@ -2,8 +2,6 @@
 
 use std::f64::consts::TAU;
 
-use kurbo::Rect;
-
 use crate::frame::Coincide;
 use crate::kind::{KindTable, Reach};
 
@@ -36,36 +34,6 @@ pub enum Matching {
     /// The same side meets the same side: a low edge meets low edges, a high edge high edges, a middle middles. Lines with no side meet
     /// any side. A turned box's low side is the one low along its own axis, so this reads best between boxes turned the same way.
     SameSide,
-}
-
-/// What a nudge does.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum NudgeMode {
-    /// To the first target strictly ahead within one step, else by the step. The default.
-    Stop,
-    /// To the next snap place ahead however far, else by one ruler tick, which the app gives.
-    Next { tick: f64 },
-    /// By the step exactly, with no snap. The marks are still those of the final box.
-    Plain,
-}
-
-/// Which objects a size match compares with.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SizeScope {
-    /// Every object of the set. The default.
-    Anywhere,
-    /// Only objects whose box meets this rectangle (the view), in the app's frame.
-    View(Rect),
-}
-
-/// What the box round a turned object is built from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BoxRound {
-    /// The corners of its frame. The default.
-    Corners,
-    /// Its outline: the box the app gives for the subject, and, on demand, the box the detail source gives for the objects near, charged to the
-    /// budget. An object with none falls back to its corners.
-    Paths,
 }
 
 /// Which families of lines are on.
@@ -111,6 +79,16 @@ pub enum SizeAxes {
     EitherAxis,
 }
 
+/// How far a line mark runs along its line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineSpan {
+    /// Across the subject's side and every coincident target. The default.
+    Every,
+    /// From the subject's side to the nearest target on the line, and no farther. The members of a group of coincident lines are kept sorted
+    /// along the line, so the nearest is found by bisection.
+    Nearest,
+}
+
 /// What marks are derived.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkRule {
@@ -140,14 +118,8 @@ pub struct Settings {
     pub angle_period: f64,
     pub marks: MarkRule,
     pub coincide: Coincide,
-    /// A resize that drags a corner keeps its proportions without being asked (the app asks for a kept ratio on any other handle with
-    /// `Constraint::Aspect`).
-    pub corners_keep_proportions: bool,
-    pub nudge: NudgeMode,
-    pub size_scope: SizeScope,
-    pub box_round: BoxRound,
-    /// How many decimal places an app shows in a label by default (see [`crate::labels::format`]).
-    pub label_places: u8,
+    /// How far a line mark runs along its line.
+    pub line_span: LineSpan,
 }
 
 impl Default for Settings {
@@ -166,11 +138,7 @@ impl Default for Settings {
             angle_period: TAU,
             marks: MarkRule::Coincident,
             coincide: Coincide::default(),
-            corners_keep_proportions: false,
-            nudge: NudgeMode::Stop,
-            size_scope: SizeScope::Anywhere,
-            box_round: BoxRound::Corners,
-            label_places: crate::labels::DEFAULT_PLACES,
+            line_span: LineSpan::Every,
         }
     }
 }
@@ -186,14 +154,6 @@ impl Settings {
             && r.times >= 0.0
             && r.at_least.is_finite()
             && r.at_least >= 0.0
-            && match self.nudge {
-                NudgeMode::Next { tick } => tick.is_finite() && tick > 0.0,
-                _ => true,
-            }
-            && match self.size_scope {
-                SizeScope::View(r) => r.x0.is_finite() && r.y0.is_finite() && r.x1.is_finite() && r.y1.is_finite(),
-                SizeScope::Anywhere => true,
-            }
             && match self.places {
                 Places::Compete { bias } => bias.is_finite() && bias >= 0.0,
                 Places::First => true,
