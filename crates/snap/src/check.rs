@@ -525,3 +525,19 @@ impl Snapped {
         hits_have_marks(self, query)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_directions_are_one_when_they_differ_by_a_half_turn_or_by_less_than_the_tolerance() {
+        let co = Coincide::default();
+        assert!(same_direction(0.0, 0.0, &co));
+        assert!(same_direction(0.3, 0.3 + PI, &co), "a half turn apart is the same line");
+        assert!(same_direction(0.0, PI - 1.0e-12, &co) && same_direction(PI - 1.0e-12, 0.0, &co), "just under a half turn is just over 0");
+        assert!(!same_direction(0.3, 0.5, &co));
+        assert!(!same_direction(0.3, PI - 0.3, &co), "mirrored about the half turn is not the same");
+        assert!(!same_direction(0.0, PI / 2.0, &co));
+    }
+}

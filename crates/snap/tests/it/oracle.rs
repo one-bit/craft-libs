@@ -593,3 +593,266 @@ mod spacing_and_angles {
         );
     }
 }
+
+mod finer_rules {
+    use craft_snap::{Direction, Id, Lattice, Scope};
+
+    use super::*;
+
+    /// The first line mark whose line is in a given direction.
+    fn mark_in(r: &mut craft_snap::Snapped, angle: f64) -> &mut Mark {
+        r.marks.iter_mut().find(|m| matches!(m, Mark::Line { direction, .. } if direction.angle() == angle)).unwrap()
+    }
+
+    #[test]
+    fn a_mark_of_the_lattice_is_on_it() {
+        let (t, s) = guides();
+        let lat = [Lattice { origin: Point::ORIGIN, pitch: vec2(10.0, 10.0), kind: Kind::Grid }];
+        let q = craft_snap::Query { lattices: &lat, ..query(box_subject(on_guides()), &s) };
+        // The guide at 5 is not a line of a lattice of 10; the guide at 20 is.
+        assert_eq!(
+            fires(&t, &q, |r| {
+                if let Mark::Line { kinds, .. } = mark_in(r, 0.0) {
+                    *kinds = vec![Kind::Grid];
+                }
+            }),
+            "a line mark names a target that is not in the set"
+        );
+        assert_eq!(
+            fires(&t, &q, |r| {
+                if let Mark::Line { kinds, .. } = mark_in(r, std::f64::consts::FRAC_PI_2) {
+                    *kinds = vec![Kind::Grid];
+                }
+            }),
+            ""
+        );
+    }
+
+    #[test]
+    fn an_axis_lock_is_asked_of_a_move_and_not_of_a_resize() {
+        let (t, s) = guides();
+        // The top side is pulled to the lattice, so the box moves along y though the lock says x: a resize is not held to a lock.
+        let q = craft_snap::Query {
+            constraint: Constraint::Axis(Axis::X),
+            rounding: Rounding::Position(vec2(2.0, 2.0)),
+            ..query(Subject::Edges { frame: frame(0.0, 0.0, 20.0, 9.3, 0.0), moving: Edges { v_max: true, ..Edges::default() } }, &s)
+        };
+        let r = run(&t, &q);
+        assert!(r.delta.y != 0.0, "{:?}", r.delta);
+        assert_eq!(rule(&t, &q, &r), "");
+    }
+
+    #[test]
+    fn the_ray_is_kept_to_within_the_tolerance_and_not_to_a_multiple_of_it() {
+        let t = scene(&[], &[], &[]);
+        let s = Settings::default();
+        let q = craft_snap::Query {
+            constraint: Constraint::Ray { origin: Point::ORIGIN, dir: kurbo::Vec2::new(3.0, 4.0) },
+            ..query(box_subject(frame(3.0, 4.0, 2.0, 2.0, 0.0)), &s)
+        };
+        let shift = |d: kurbo::Vec2| {
+            move |r: &mut craft_snap::Snapped| {
+                r.delta += d;
+                r.frame.as_mut().unwrap().centre += d;
+            }
+        };
+        assert_eq!(fires(&t, &q, shift(kurbo::Vec2::new(-4.0e-10, 3.0e-10))), "", "5e-10 off the ray is within the tolerance");
+        assert_eq!(fires(&t, &q, shift(kurbo::Vec2::new(-4.0e-9, 3.0e-9))), "the reference point left the ray");
+    }
+
+    #[test]
+    fn a_rounding_is_on_the_lattice_of_its_own_pitch_whatever_it_is() {
+        let t = scene(&[], &[], &[]);
+        let s = Settings::default();
+        let q = craft_snap::Query { rounding: Rounding::Position(vec2(2.5, 2.5)), ..query(box_subject(frame(3.2, 4.3, 2.0, 2.0, 0.0)), &s) };
+        assert_eq!(
+            fires(&t, &q, |r| {
+                r.delta.x += 0.3;
+                r.frame.as_mut().unwrap().centre.x += 0.3;
+            }),
+            "the rounding does not hold"
+        );
+        // A pitch of no end rounds nothing.
+        let q =
+            craft_snap::Query { rounding: Rounding::Position(vec2(f64::INFINITY, 2.5)), ..query(box_subject(frame(3.2, 4.3, 2.0, 2.0, 0.0)), &s) };
+        let r = run(&t, &q);
+        assert_eq!(rule(&t, &q, &r), "");
+    }
+
+    #[test]
+    fn a_line_through_a_corner_is_the_mark_of_a_resize_and_not_of_a_move_and_must_cover_the_corner() {
+        // A resize: a corner of the dragged side is on the guide at 13.
+        let a = 30f64.to_radians();
+        let (t, s) = (scene(&[], &[13.0], &[]), Settings::default());
+        let q = query(Subject::Edges { frame: frame(0.0, 0.0, 20.0, 10.0, a), moving: Edges { u_max: true, ..Edges::default() } }, &s);
+        assert_eq!(
+            fires(&t, &q, |r| {
+                if let Mark::Line { segment, .. } = line_mark(r) {
+                    *segment = Line::new(Point::new(segment.p0.x, segment.p0.y + 100.0), Point::new(segment.p1.x, segment.p1.y + 100.0));
+                }
+            }),
+            "no side of the final geometry is on a line mark, or its segment does not cover it"
+        );
+        // A move: a guide at the height of a corner that is not the highest or the lowest is not on any side of the box round the turned one.
+        let f = frame(0.0, 0.0, 10.0, 6.0, 0.3);
+        let y = f.corners()[1].y;
+        let t = scene(&[], &[], &[y]);
+        let q = craft_snap::Query { zoom: 100.0, ..query(box_subject(f), &s) };
+        let bogus = Mark::Line {
+            direction: Direction::new(std::f64::consts::FRAC_PI_2).unwrap(),
+            offset: y,
+            segment: Line::new(Point::new(0.0, y), Point::new(10.0, y)),
+            kinds: vec![Kind::Guide],
+            first: Some(Id(2000)),
+            count: 1,
+            hit: false,
+        };
+        assert_eq!(fires(&t, &q, |r| r.marks.push(bogus)), "no side of the final geometry is on a line mark, or its segment does not cover it");
+    }
+
+    #[test]
+    fn a_size_mark_is_whole_in_its_side_and_names_an_object_in_the_view() {
+        let a_side = |r: &mut craft_snap::Snapped| {
+            for m in &mut r.marks {
+                if let Mark::Size { side, .. } = m {
+                    side.p1.x += 1.0;
+                }
+            }
+        };
+        let t = scene(&[(1, frame(100.0, 100.0, 7.0, 2.0, 0.0))], &[], &[]);
+        let s = Settings::default();
+        let q = query(Subject::Edges { frame: frame(0.0, 0.0, 7.2, 5.0, 0.0), moving: Edges { u_max: true, ..Edges::default() } }, &s);
+        assert_eq!(fires(&t, &q, a_side), "a size mark's side is not a side of the final box");
+        // The view: one box in it, and four outside it, each outside in one direction only.
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        let only_size = craft_snap::Parts { size: true, ..craft_snap::Parts::NONE };
+        let at = |x: f64, y: f64| craft_snap::Object { frame: frame(x, y, 7.0, 2.0, 0.0), bounds: None, angle: None, parts: only_size };
+        b.object(Id(1), at(30.0, 30.0)).unwrap();
+        for (i, (x, y)) in [(150.0, 40.0), (-50.0, 40.0), (40.0, 150.0), (40.0, -50.0)].into_iter().enumerate() {
+            b.object(Id(10 + i as u64), at(x, y)).unwrap();
+        }
+        let t = b.build();
+        let mut s = Settings::default();
+        s.kinds.set(Kind::Size, craft_snap::KindRule { on: true, reach: Reach::Screen(6.0), priority: 6, scope: Scope::View });
+        let index = t.in_view(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0));
+        let q = craft_snap::Query {
+            view: Some(&index),
+            ..query(Subject::Edges { frame: frame(50.0, 50.0, 7.2, 5.0, 0.0), moving: Edges { u_max: true, ..Edges::default() } }, &s)
+        };
+        let r = run(&t, &q);
+        assert!(r.marks.iter().any(|m| matches!(m, Mark::Size { matched: Some((Id(1), _)), .. })), "{:?}", r.marks);
+        for out in [10u64, 11, 12, 13] {
+            let rule_of = fires(&t, &q, |r| {
+                for m in &mut r.marks {
+                    if let Mark::Size { matched: Some((id, _)), .. } = m {
+                        *id = Id(out);
+                    }
+                }
+            });
+            assert_eq!(rule_of, "a size mark names an object that has no side of that length", "{out}");
+        }
+    }
+
+    #[test]
+    fn a_place_mark_of_an_app_place_names_its_object_and_its_number() {
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        b.point(Some(Id(9)), Point::new(50.0, 50.0), Kind::Point(0), 3).unwrap();
+        let t = b.build();
+        let s = Settings::default();
+        let q = query(Subject::Point { at: Point::new(50.5, 50.5), base: None }, &s);
+        let edit = |f: fn(&mut Mark)| {
+            move |r: &mut craft_snap::Snapped| {
+                for m in &mut r.marks {
+                    if matches!(m, Mark::Place { .. }) {
+                        f(m);
+                    }
+                }
+            }
+        };
+        let want = "a place mark names a place that is not in the set";
+        assert_eq!(
+            fires(
+                &t,
+                &q,
+                edit(|m| {
+                    if let Mark::Place { number, .. } = m {
+                        *number = Some(4);
+                    }
+                })
+            ),
+            want
+        );
+        assert_eq!(
+            fires(
+                &t,
+                &q,
+                edit(|m| {
+                    if let Mark::Place { id, .. } = m {
+                        *id = Some(Id(8));
+                    }
+                })
+            ),
+            want
+        );
+        assert_eq!(
+            fires(
+                &t,
+                &q,
+                edit(|m| {
+                    if let Mark::Place { kind, .. } = m {
+                        *kind = Kind::Point(1);
+                    }
+                })
+            ),
+            want
+        );
+    }
+
+    #[test]
+    fn a_gap_is_more_than_nothing_and_its_ends_are_on_boxes_that_cover_the_mark_across() {
+        // A gap of no length between two boxes that touch is no gap.
+        let t =
+            scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(15.0, 0.0, 10.0, 10.0, 0.0)), (3, frame(45.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let s = Settings { spacing_reach: SpacingReach { times: 4.0, at_least: 200.0 }, ..Settings::default() };
+        let q = query(box_subject(frame(75.0, 0.0, 10.0, 10.0, 0.0)), &s);
+        let zero = |r: &mut craft_snap::Snapped| {
+            r.marks.push(Mark::Gap {
+                direction: Direction::new(0.0).unwrap(),
+                segment: Line::new(Point::new(10.0, 0.0), Point::new(10.0, 0.0)),
+                value: 0.0,
+                chain: 9,
+                subject: false,
+                hit: false,
+            });
+        };
+        assert_eq!(fires(&t, &q, zero), "a gap mark is not along its direction, or its length is not its value");
+        // A staircase: the first box across [-5, 5], the second across [3, 13], and the gap is marked across their overlap, at 4.
+        let linked = Settings { spacing_row: craft_snap::SpacingRow::Linked, ..s };
+        let t = scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(35.0, 8.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let q = query(box_subject(frame(65.2, 13.0, 10.0, 10.0, 0.0)), &linked);
+        let first_gap_across = |y: f64| {
+            move |r: &mut craft_snap::Snapped| {
+                if let Some(Mark::Gap { segment, .. }) = r.marks.iter_mut().find(|m| matches!(m, Mark::Gap { subject: false, .. })) {
+                    *segment = Line::new(Point::new(segment.p0.x, y), Point::new(segment.p1.x, y));
+                }
+            }
+        };
+        let want = "an end of a gap mark is not on a facing side of an object";
+        // Across -3 only the first box is there, and across 10 only the second.
+        assert_eq!(fires(&t, &q, first_gap_across(-3.0)), want);
+        assert_eq!(fires(&t, &q, first_gap_across(10.0)), want);
+    }
+
+    #[test]
+    fn a_refused_result_that_moved_nothing_but_drew_something_is_not_whole() {
+        let (t, s) = guides();
+        let q = query(box_subject(on_guides()), &s);
+        assert_eq!(
+            fires(&t, &q, |r| {
+                r.work.refused = Some(Refusal::Zoom);
+                r.delta = kurbo::Vec2::ZERO;
+            }),
+            "a refused query moved the subject"
+        );
+    }
+}
