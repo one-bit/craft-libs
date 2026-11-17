@@ -713,6 +713,22 @@ mod tests {
     }
 
     #[test]
+    fn the_entry_sizes_are_the_ones_the_readme_gives() {
+        use std::mem::size_of;
+        assert_eq!(
+            (
+                size_of::<ObjectEntry>(),
+                size_of::<RawLine>(),
+                size_of::<crate::index::Entry>(),
+                size_of::<crate::index::Member>(),
+                size_of::<PointEntry>()
+            ),
+            (112, 56, 56, 32, 40),
+            "object, raw line, entry, member, place"
+        );
+    }
+
+    #[test]
     fn hostile_targets_are_refused_and_counted() {
         let limits = Limits { objects: 2, lines: 3, points: 1, paths: 1, path_elements: 4, ..Limits::default() };
         let mut b = TargetsBuilder::new(limits);

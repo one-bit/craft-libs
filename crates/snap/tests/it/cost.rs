@@ -299,3 +299,46 @@ fn every_counter_is_at_most_its_cap_and_truncated_says_exactly_when_a_cap_was_me
         assert_eq!(w.truncated, w.cut.any(), "{label}: truncated is exactly some cap met");
     }
 }
+
+/// The body of the child process of the memory test: a build at the default limits, every object turned, and one query.
+#[test]
+fn child_of_the_memory_test() {
+    if std::env::var_os("CRAFT_SNAP_CHILD").is_none() {
+        return;
+    }
+    let mut b = TargetsBuilder::new(Limits::default());
+    let mut refused = 0;
+    for i in 0..200_010u64 {
+        let f = frame((i % 500) as f64 * 9.0, (i / 500) as f64 * 9.0, 6.0, 4.0, 0.3 + (i % 7) as f64 * 0.1);
+        if b.object(Id(i), Object { frame: f, bounds: None, angle: None, parts: Parts { bounds_lines: true, own_lines: true, ..Parts::NONE } })
+            .is_err()
+        {
+            refused += 1;
+        }
+    }
+    let t = b.build();
+    let s = align_only();
+    let w = probe(&t, &s, (500.0, 20.0));
+    println!(
+        "CHILD objects={} refused={} over_limit={} places_query_bisect={}",
+        t.report().objects,
+        refused,
+        t.report().refused_over_limit,
+        w.bisect_steps
+    );
+}
+
+#[test]
+fn a_build_at_the_default_limits_with_every_object_turned_fits_in_a_child_under_a_memory_limit_and_refuses_past_them() {
+    let exe = std::env::current_exe().unwrap();
+    // 3 GB of address space for the child: the build holds at most 200,000 objects, a hundred bytes each, and twelve transient lines each.
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("ulimit -v 3000000 && exec \"{}\" --exact cost::child_of_the_memory_test --nocapture --test-threads 1", exe.display()))
+        .env("CRAFT_SNAP_CHILD", "1")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}\n{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("CHILD objects=200000 refused=10 over_limit=10"), "{text}");
+}
