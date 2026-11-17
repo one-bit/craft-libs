@@ -321,13 +321,16 @@ fn on_lattice(co: &Coincide, v: f64, step: f64) -> bool {
     !(step.is_finite() && step > 0.0) || co.same(v, (v / step).round() * step) || !(v / step).is_finite()
 }
 
+/// A point of a resized box that leads the drag, and the page axes it leads along (x, y).
+type LeadingPoint = (Point, (bool, bool));
+
 /// The points of a resized box whose coordinate the rounding sets, each with the page axes it may be set along (a point that leads along `x` is
 /// on the lattice in `x`; where its two components are equal it may lead along either). For plain sides that is the middle of each moving side, led
 /// along the page axis its own axis lies nearer to; for sides held together about the centre, the middle of the high side of each axis; under a
 /// kept aspect it is the dragged corner (or the middle of the dragged side), the carried point farthest from the fixed corner or the centre.
 /// The second part says whether one of them is enough: under a kept aspect there is one scale, so one leading coordinate, and the points
 /// tied for farthest (a corner dragged about the centre) are alternatives.
-fn leading_points(q: &Query<'_>, f: &crate::frame::TurnedBox, moving: &crate::query::Edges) -> (Vec<(Point, (bool, bool))>, bool) {
+fn leading_points(q: &Query<'_>, f: &crate::frame::TurnedBox, moving: &crate::query::Edges) -> (Vec<LeadingPoint>, bool) {
     let c = f.corners();
     let (u, v) = (f.u(), f.v());
     let mid = |a: Point, b: Point| a.midpoint(b);
@@ -546,7 +549,7 @@ fn nudge_stops(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
         // No target ahead: exactly the fallback.
         return if co.same(d, fallback) { Ok(()) } else { broken("a nudge with no target ahead did not move by the fallback", (d, fallback)) };
     }
-    if !(d > co.tol(d, 0.0)) {
+    if d <= co.tol(d, 0.0) {
         return broken("a nudge did not stop strictly ahead of where it began", d);
     }
     if !stops.iter().any(|s| co.same(*s, d)) {
