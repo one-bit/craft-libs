@@ -126,6 +126,24 @@ fn a_step_lattice_is_taken_within_half_a_turn_and_not_beyond_it() {
     assert!(r.hits.is_empty());
 }
 
+#[test]
+fn a_lattice_of_angles_with_a_zero_off_the_origin_is_met_from_that_zero() {
+    let t = turned_scene(&[]);
+    let s = Settings::default();
+    let (step, zero) = (15f64.to_radians(), 0.1);
+    // 31 degrees is 4.7 from the lattice point at 5.7 + 30 and 10.3 from the one before it.
+    let hard = craft_snap::Query { constraint: Constraint::Angles { step, zero }, ..query(rotate(31f64.to_radians(), 150.0, None), &s) };
+    let r = run(&t, &hard);
+    assert!((r.angle.unwrap() - (zero + 2.0 * step)).abs() < 1e-12, "{:?}", r.angle);
+    r.check(&t, &hard).unwrap();
+    // The same as a soft lattice of steps.
+    let soft = query(rotate(31f64.to_radians(), 150.0, Some((step, zero))), &s);
+    let r = run(&t, &soft);
+    assert!((r.angle.unwrap() - (zero + 2.0 * step)).abs() < 1e-12, "{:?}", r.angle);
+    r.check(&t, &soft).unwrap();
+    assert!(matches!(r.marks.first(), Some(Mark::Angle { step: Some(_), .. })), "{:?}", r.marks);
+}
+
 mod nudges {
     use craft_snap::{Axis, Kind, Mark, Settings, Subject};
     use kurbo::Point;
