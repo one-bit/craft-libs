@@ -386,3 +386,97 @@ mod line_span {
         let _ = Cuts::default();
     }
 }
+
+mod lattices {
+    use craft_snap::{Anchors, Constraint, Lattice, Mark, Reach, Rounding};
+
+    use super::*;
+
+    fn grid(origin: Point, pitch: (f64, f64)) -> Lattice {
+        Lattice { origin, pitch: vec2(pitch.0, pitch.1), kind: Kind::Grid }
+    }
+
+    #[test]
+    fn a_side_lands_on_the_nearest_line_of_a_lattice_from_any_distance_on_each_axis_and_it_is_marked() {
+        // An object far off keeps the origin of the targets away from 0: the lattice is in the app's frame.
+        let t = scene(&[(1, frame(1.0e4, 1.0e4, 4.0, 4.0, 0.0))], &[], &[]);
+        let s = Settings::default();
+        let lat = [grid(Point::new(1.5, -2.0), (10.0, 5.0))];
+        // Sides at x 36.5, 41.5, 46.5 (lines at 41.5, 51.5: the middle is on one), y: the nearest lines are 3 from the low side.
+        let f = frame(41.5, 20.0, 10.0, 4.0, 0.0);
+        let q = craft_snap::Query { lattices: &lat, ..query(box_subject(f), &s) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert_eq!(r.delta.x, 0.0, "{:?}", r.delta);
+        // y lines are at -2 + 5n: 18 and 23; the sides at 18, 20, 22 (the low side is on 18).
+        assert_eq!(r.delta.y, 0.0, "{:?}", r.delta);
+        assert!(r.marks.iter().any(|m| matches!(m, Mark::Line { kinds, .. } if kinds == &[Kind::Grid])));
+        // Moved a little, it snaps back from any distance (the grid reaches everywhere), to the nearest line.
+        let f = frame(43.4, 21.4, 10.0, 4.0, 0.0);
+        let q = craft_snap::Query { lattices: &lat, ..query(box_subject(f), &s) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!((r.delta.x + 1.9).abs() < 1e-9, "the middle goes to 41.5: {:?}", r.delta);
+        assert!(
+            (r.delta.y + 1.4).abs() < 1e-9 || (r.delta.y - 1.6).abs() < 1e-9 || (r.delta.y - 0.6).abs() < 1e-9 || r.delta.y.abs() < 3.0,
+            "{:?}",
+            r.delta
+        );
+        assert!(r.hits.iter().all(|h| h.kind == Kind::Grid || h.kind.is_place()), "{:?}", r.hits);
+    }
+
+    #[test]
+    fn a_lattice_whose_pitch_or_origin_is_not_a_number_or_whose_kind_is_off_has_no_lines() {
+        let t = scene(&[], &[], &[]);
+        let s = Settings::default();
+        let f = frame(43.4, 21.4, 10.0, 4.0, 0.0);
+        for lat in [
+            grid(Point::new(0.0, 0.0), (0.0, 0.0)),
+            grid(Point::new(f64::NAN, 0.0), (10.0, 10.0)),
+            grid(Point::new(0.0, 0.0), (-1.0, f64::INFINITY)),
+            Lattice { kind: Kind::Ruler, ..grid(Point::ORIGIN, (1.0, 1.0)) },
+        ] {
+            let lats = [lat];
+            let q = craft_snap::Query { lattices: &lats, ..query(box_subject(f), &s) };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            // A lattice with an origin that is not a number has no line on that axis, and the other axis is its own.
+            let nan_x = lat.origin.x.is_nan();
+            assert_eq!(r.delta.x, 0.0, "{lat:?}");
+            assert!(nan_x || r.delta.y == 0.0, "{lat:?}");
+        }
+        // One axis with a pitch and the other without: only the first has lines.
+        let lats = [grid(Point::new(0.0, 0.0), (10.0, f64::NAN))];
+        let q = craft_snap::Query { lattices: &lats, ..query(box_subject(f), &s) };
+        let r = run(&t, &q);
+        assert!(r.delta.x != 0.0 && r.delta.y == 0.0, "{:?}", r.delta);
+    }
+
+    #[test]
+    fn a_lattice_under_an_axis_lock_a_rounding_and_a_view_of_the_far_page_still_holds() {
+        let t = scene(&[(1, frame(-3.0e5, 2.0e5, 4.0, 4.0, 0.0))], &[], &[]);
+        let s = Settings::default();
+        let lat = [grid(Point::new(0.25, 0.75), (2.5, 2.5))];
+        for (constraint, rounding) in [
+            (Constraint::None, Rounding::None),
+            (Constraint::Axis(craft_snap::Axis::X), Rounding::None),
+            (Constraint::None, Rounding::Position(vec2(0.25, 0.25))),
+            (Constraint::Ray { origin: Point::ORIGIN, dir: vec2(1.0, 0.5) }, Rounding::None),
+        ] {
+            let f = frame(33.3, 17.1, 6.0, 3.0, 0.0);
+            let q = craft_snap::Query {
+                lattices: &lat,
+                constraint,
+                rounding,
+                ..query(Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &[] }, &s)
+            };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{constraint:?} {rounding:?}: {b:?}"));
+        }
+        let mut s2 = Settings::default();
+        s2.kinds.set(Kind::Grid, KindRule { on: true, reach: Reach::Screen(0.5), priority: 8, scope: Scope::All });
+        let q = craft_snap::Query { lattices: &lat, ..query(box_subject(frame(33.3, 17.1, 6.0, 3.0, 0.0)), &s2) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+    }
+}

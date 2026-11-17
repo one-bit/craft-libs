@@ -158,6 +158,7 @@ proptest! {
         c in prop_oneof![3 => Just(Constraint::None), 1 => Just(Constraint::Axis(Axis::X)), 1 => Just(Constraint::Axis(Axis::Y))],
         r in rounding(),
         first in any::<bool>(),
+        lattice in prop_oneof![Just(None), (-5.0f64..5.0, -5.0f64..5.0, 1.0f64..12.0, 1.0f64..12.0).prop_map(Some)],
     ) {
         let objs: Vec<(u64, _)> = objects.iter().enumerate().map(|(i, o)| (i as u64, frame(o.0, o.1, o.2, o.3, o.4))).collect();
         let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
@@ -175,7 +176,8 @@ proptest! {
         };
         let f = frame(sub.0 + jitter.0, sub.1 + jitter.1, sub.2, sub.3, sub.4);
         let own = [Point::new(sub.0, sub.1)];
-        let q = craft_snap::Query { constraint: c, rounding: r, ..query(Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &own }, &s) };
+        let lats: Vec<craft_snap::Lattice> = lattice.map(|(ox, oy, px, py)| craft_snap::Lattice { origin: Point::new(ox, oy), pitch: vec2(px, py), kind: craft_snap::Kind::Grid }).into_iter().collect();
+        let q = craft_snap::Query { constraint: c, rounding: r, lattices: &lats, ..query(Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &own }, &s) };
         let out = run(&t, &q);
         if let Err(b) = out.check(&t, &q) {
             prop_assert!(false, "{:?}\nresult: {:?}", b, out);
