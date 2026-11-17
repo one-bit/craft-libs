@@ -417,11 +417,8 @@ mod lattices {
         let r = run(&t, &q);
         r.check(&t, &q).unwrap();
         assert!((r.delta.x + 1.9).abs() < 1e-9, "the middle goes to 41.5: {:?}", r.delta);
-        assert!(
-            (r.delta.y + 1.4).abs() < 1e-9 || (r.delta.y - 1.6).abs() < 1e-9 || (r.delta.y - 0.6).abs() < 1e-9 || r.delta.y.abs() < 3.0,
-            "{:?}",
-            r.delta
-        );
+        // y lines at -2 + 5n; the sides at 19.4, 21.4, 23.4: the nearest line is 23 (0.4 from the high side).
+        assert!((r.delta.y + 0.4).abs() < 1e-9, "{:?}", r.delta);
         assert!(r.hits.iter().all(|h| h.kind == Kind::Grid || h.kind.is_place()), "{:?}", r.hits);
     }
 
@@ -478,5 +475,93 @@ mod lattices {
         let q = craft_snap::Query { lattices: &lat, ..query(box_subject(frame(33.3, 17.1, 6.0, 3.0, 0.0)), &s2) };
         let r = run(&t, &q);
         r.check(&t, &q).unwrap();
+    }
+}
+
+mod reach_across {
+    use craft_snap::{Budget, Cuts, Frames, Reach};
+
+    use super::*;
+
+    fn settings(reach: f64) -> Settings {
+        let mut s = Settings { align_reach: Some(Reach::Document(reach)), frames: Frames { page: true, own: true }, ..Settings::default() };
+        for k in [Kind::Corner, Kind::SideMiddle, Kind::Spacing, Kind::Size] {
+            s.kinds.set(k, KindRule { on: false, reach: Reach::Screen(6.0), priority: 1, scope: Scope::All });
+        }
+        s
+    }
+
+    #[test]
+    fn turned_objects_at_every_angle_are_aligned_by_their_own_sides_within_a_reach_across() {
+        for a in [0.3, 1.0, 1.5, 2.0, 2.8, 3.5, 4.0, 5.5] {
+            let (c, s) = (f64::cos(a), f64::sin(a));
+            // One object turned by `a`; the subject turned alike, moved 2 along its own u and 0.5 along its own v.
+            let t = scene(&[(1, frame(0.0, 0.0, 20.0, 8.0, a))], &[], &[]);
+            let st = Settings { frames: Frames { page: false, own: true }, ..settings(100.0) };
+            let f = frame(2.0 * c - 0.5 * s, 2.0 * s + 0.5 * c, 20.0, 8.0, a);
+            let q = query(Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &[] }, &st);
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{a}: {b:?}"));
+            assert!(r.hits.iter().any(|h| h.side.is_some_and(|(_, own)| own == craft_snap::OwnOrBounds::Own)), "{a}: {:?}", r.hits);
+            assert!((r.frame.unwrap().centre - Point::ORIGIN).hypot() < 1e-9, "{a}: it lands back on the object's sides: {:?}", r.frame);
+        }
+    }
+
+    #[test]
+    fn an_object_with_only_bounds_lines_or_only_own_lines_is_still_a_target() {
+        let mut b = TargetsBuilder::new(Limits::default());
+        b.object(
+            Id(1),
+            Object { frame: frame(0.0, 0.0, 10.0, 10.0, 0.0), bounds: None, angle: None, parts: Parts { bounds_lines: true, ..Parts::NONE } },
+        )
+        .unwrap();
+        b.object(
+            Id(2),
+            Object { frame: frame(20.0, 30.0, 10.0, 10.0, 0.0), bounds: None, angle: None, parts: Parts { own_lines: true, ..Parts::NONE } },
+        )
+        .unwrap();
+        let t = b.build();
+        let st = settings(100.0);
+        let low = query(
+            Subject::Box {
+                frame: frame(10.0, 15.0, 8.0, 4.0, 0.0),
+                bounds: None,
+                u: Anchors { min: true, mid: false, max: false },
+                v: Anchors::NONE,
+                own: &[],
+            },
+            &st,
+        );
+        let r = run(&t, &low);
+        r.check(&t, &low).unwrap();
+        assert!(r.hits.iter().any(|h| h.id == Some(Id(1))), "only bounds lines: {:?}", r.hits);
+        let high = query(
+            Subject::Box {
+                frame: frame(24.0, 15.0, 8.0, 4.0, 0.0),
+                bounds: None,
+                u: Anchors { min: true, mid: false, max: false },
+                v: Anchors::NONE,
+                own: &[],
+            },
+            &st,
+        );
+        let r2 = run(&t, &high);
+        r2.check(&t, &high).unwrap();
+        assert!(r2.hits.iter().any(|h| h.id == Some(Id(2))), "only own lines: {:?}", r2.hits);
+    }
+
+    #[test]
+    fn a_window_cut_by_the_visits_or_by_the_candidates_says_which() {
+        let objs: Vec<(u64, TurnedBox)> = (0..40u64).map(|i| (i, frame(i as f64 * 3.0, 0.0, 2.0, 2.0, 0.0))).collect();
+        let t = scene(&objs, &[], &[]);
+        let st = settings(1000.0);
+        let run_with = |budget: Budget| {
+            let q = craft_snap::Query { budget, ..query(box_subject(frame(60.0, 0.0, 2.0, 2.0, 0.0)), &st) };
+            run(&t, &q).work
+        };
+        let few = run_with(Budget { candidates: 3, ..Budget::default() });
+        assert!(few.cut.has(Cuts::CANDIDATES) && !few.cut.has(Cuts::WINDOW_VISITS), "{few:?}");
+        let short = run_with(Budget { window_visits: 6, ..Budget::default() });
+        assert!(short.cut.has(Cuts::WINDOW_VISITS), "{short:?}");
     }
 }
