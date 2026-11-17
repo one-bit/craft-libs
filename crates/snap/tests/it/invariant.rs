@@ -206,6 +206,7 @@ proptest! {
         anywhere in any::<bool>(),
         fallback in 0.05f64..4.0,
         s in settings(),
+        r in rounding(),
     ) {
         let objs: Vec<(u64, _)> = objects.iter().enumerate().map(|(i, o)| (i as u64, frame(o.0, o.1, o.2, o.3, o.4))).collect();
         let t = scene(&objs, &gx, &gy);
@@ -213,7 +214,9 @@ proptest! {
         let axis = if axis_x { Axis::X } else { Axis::Y };
         let reach = if anywhere { craft_snap::NudgeReach::Anywhere } else { craft_snap::NudgeReach::Within(step) };
         let fallback = if anywhere { fallback } else { step };
-        let q = query(Subject::Nudge { frame: f, bounds: None, axis, forward, reach, fallback }, &s);
+        // A nudge is not rounded, whatever lattice the app has: the rounding goes in and the result is the same.
+        let q = craft_snap::Query { rounding: r, ..query(Subject::Nudge { frame: f, bounds: None, axis, forward, reach, fallback }, &s) };
+        let plain = run(&t, &query(Subject::Nudge { frame: f, bounds: None, axis, forward, reach, fallback }, &s));
         let out = run(&t, &q);
         if let Err(b) = out.check(&t, &q) {
             prop_assert!(false, "{:?}\nresult: {:?}", b, out);
@@ -223,5 +226,6 @@ proptest! {
             prop_assert!(travel <= step * (1.0 + 1e-9));
         }
         prop_assert!(travel > 0.0 || fallback == 0.0);
+        prop_assert_eq!(plain.delta, out.delta);
     }
 }
