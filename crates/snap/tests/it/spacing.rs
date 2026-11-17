@@ -242,12 +242,20 @@ fn only_the_gap_the_snap_repeated_is_marked_when_the_marks_are_asked_to_be_the_h
 }
 
 #[test]
-fn an_object_whose_end_is_exactly_the_reach_from_the_box_is_a_neighbour() {
+fn an_object_whose_end_is_exactly_the_reach_from_the_box_is_a_neighbour_on_either_side() {
     // The box is at 300 to 310 and the row reaches 100 along (4 times its length is 40, the least is 100): the strip starts at 200. The first box ends
     // there, and its gap of 30 to the second is the gap the subject repeats from the second's end at 270.
     let s = Settings { spacing_reach: SpacingReach { times: 4.0, at_least: 100.0 }, ..Settings::default() };
     let t = scene(&[(1, frame(190.0, 0.0, 20.0, 10.0, 0.0)), (2, frame(250.0, 0.0, 40.0, 10.0, 0.0))], &[], &[]);
     let q = query(box_subject(frame(305.0, 0.0, 10.0, 10.0, 0.0)), &s);
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap();
+    assert!(r.hits.iter().any(|h| h.kind == Kind::Spacing), "{:?}", r.hits);
+    assert_eq!(r.marks.iter().filter(|m| matches!(m, Mark::Gap { .. })).count(), 2, "{:?}", r.marks);
+    // The same the other way: the box is at -310 to -300, the second box starts at -270, and the last starts at -200, exactly the reach past the box's
+    // high side (-300).
+    let t = scene(&[(1, frame(-250.0, 0.0, 40.0, 10.0, 0.0)), (2, frame(-190.0, 0.0, 20.0, 10.0, 0.0))], &[], &[]);
+    let q = query(box_subject(frame(-305.0, 0.0, 10.0, 10.0, 0.0)), &s);
     let r = run(&t, &q);
     r.check(&t, &q).unwrap();
     assert!(r.hits.iter().any(|h| h.kind == Kind::Spacing), "{:?}", r.hits);
