@@ -7,8 +7,9 @@
 //! * **Angle steps.** A soft lattice `(step, zero)` of kind `AngleStep` competes with a match under the settings; a hard lattice
 //!   (`Constraint::Angles`) allows only angles on it, and a match off it is not taken.
 
+use crate::budget::Refusal;
 use crate::ctx::Ctx;
-use crate::frame::Id;
+use crate::frame::{Coincide, Id};
 use crate::kind::{Kind, Reach};
 use crate::query::Constraint;
 use crate::settings::Choose;
@@ -46,21 +47,32 @@ fn limit(cx: &Ctx<'_>, kind: Kind, radius: f64) -> Option<f64> {
     }
 }
 
-/// Whether the angle is on the lattice `(step, zero)` within the tolerance.
-pub(crate) fn on_lattice(a: f64, step: f64, zero: f64, tol: f64) -> bool {
-    let x = wrap(a - zero, step);
-    x.abs() <= tol
+/// How far an angle may be from a lattice and be on it: the tolerance of two directions, or, at an angle large enough that the spacing of the
+/// numbers is wider, the relative one. One rule, read by the solver, the marks and the check.
+pub(crate) fn tolerance(co: &Coincide, a: f64, zero: f64) -> f64 {
+    co.angle.max(co.rel * a.abs().max(zero.abs()))
 }
 
-fn lattice_hit(raw: f64, step: (f64, f64), kind: Kind, prio: u8) -> AngleHit {
+/// Whether the angle is on the lattice `(step, zero)` within `tol`. An angle or a lattice that is not a usable number is on none.
+pub(crate) fn on_lattice(a: f64, step: f64, zero: f64, tol: f64) -> bool {
+    if !(a.is_finite() && step.is_finite() && step > 0.0 && zero.is_finite()) {
+        return false;
+    }
+    wrap(a - zero, step).abs() <= tol
+}
+
+/// The lattice angle nearest `raw`, if it is a finite number on the lattice: a huge angle or a tiny step has none.
+fn lattice_hit(co: &Coincide, raw: f64, step: (f64, f64), kind: Kind, prio: u8) -> Option<AngleHit> {
     let k = ((raw - step.1) / step.0).round();
     let to = step.1 + k * step.0;
-    AngleHit { kind, id: None, delta: to - raw, to, prio, step: Some(step) }
+    let delta = to - raw;
+    let usable = k.is_finite() && to.is_finite() && delta.is_finite() && on_lattice(to, step.0, step.1, tolerance(co, to, step.1));
+    usable.then_some(AngleHit { kind, id: None, delta, to, prio, step: Some(step) })
 }
 
 /// The match candidates near the raw angle: the nearest below and above it, and across the wrap.
 fn matches(cx: &mut Ctx<'_>, raw: f64, lim: f64, hard: Option<(f64, f64)>) -> Option<AngleHit> {
-    let p = cx.s.angle_period;
+    let (p, co) = (cx.s.angle_period, cx.co);
     let t = cx.t;
     let arr = t.angles(p, &mut cx.work.made)?;
     cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(crate::index::log_steps(arr.len()));
@@ -69,8 +81,8 @@ fn matches(cx: &mut Ctx<'_>, raw: f64, lim: f64, hard: Option<(f64, f64)>) -> Op
     let near = [i.checked_sub(1), Some(i), Some(0), arr.len().checked_sub(1)].into_iter().flatten().filter_map(|j| arr.get(j));
     let best = near
         .map(|l| (wrap(l.length - raw_f, p), l.id, l.length + p * ((raw - l.length) / p).round()))
-        .filter(|(d, _, _)| d.abs() <= lim)
-        .filter(|(d, _, _)| hard.is_none_or(|(st, z)| on_lattice(raw + d, st, z, cx.co.angle.max(1.0e-9))))
+        .filter(|(d, _, to)| d.is_finite() && to.is_finite() && d.abs() <= lim)
+        .filter(|(_, _, to)| hard.is_none_or(|(st, z)| on_lattice(*to, st, z, tolerance(&co, *to, z))))
         .min_by(|a, b| a.0.abs().total_cmp(&b.0.abs()).then(a.1.cmp(&b.1)))?;
     Some(AngleHit { kind: Kind::Angle, id: Some(best.1), delta: best.0, to: best.2, prio: cx.rule(Kind::Angle).priority, step: None })
 }
@@ -85,17 +97,25 @@ pub(crate) fn solve_rotate(cx: &mut Ctx<'_>, raw: f64, radius: f64, step: Option
     if let Some(lim) = limit(cx, Kind::Angle, radius) {
         cands.extend(matches(cx, raw, lim, hard));
     }
+    let co = cx.co;
     if let Some(h) = hard {
-        cands.push(lattice_hit(raw, h, Kind::AngleStep, cx.rule(Kind::AngleStep).priority));
-    } else if let Some(st) = step {
-        let h = lattice_hit(raw, st, Kind::AngleStep, cx.rule(Kind::AngleStep).priority);
+        // A hard lattice that no finite angle lies on (a huge angle, a tiny step) cannot be met: no angle, and the reason.
+        match lattice_hit(&co, raw, h, Kind::AngleStep, cx.rule(Kind::AngleStep).priority) {
+            Some(l) => cands.push(l),
+            None => {
+                cx.work.refused = Some(Refusal::NotFinite);
+                return Solution::new();
+            }
+        }
+    } else if let Some(h) = step.and_then(|st| lattice_hit(&co, raw, st, Kind::AngleStep, cx.rule(Kind::AngleStep).priority)) {
         if limit(cx, Kind::AngleStep, radius).is_some_and(|l| h.delta.abs() <= l) {
             cands.push(h);
         }
     }
-    let co = cx.co;
     let order = |a: &&AngleHit, b: &&AngleHit| {
-        let dist = |x: &AngleHit, y: &AngleHit| if co.same(x.delta.abs(), y.delta.abs()) { std::cmp::Ordering::Equal } else { x.delta.abs().total_cmp(&y.delta.abs()) };
+        let dist = |x: &AngleHit, y: &AngleHit| {
+            if co.same(x.delta.abs(), y.delta.abs()) { std::cmp::Ordering::Equal } else { x.delta.abs().total_cmp(&y.delta.abs()) }
+        };
         match cx.s.choose {
             Choose::Nearest => dist(a, b).then(a.prio.cmp(&b.prio)),
             Choose::Ranked => a.prio.cmp(&b.prio).then(dist(a, b)),
@@ -105,7 +125,7 @@ pub(crate) fn solve_rotate(cx: &mut Ctx<'_>, raw: f64, radius: f64, step: Option
     };
     let best = cands.iter().min_by(order).copied();
     let mut sol = Solution::new();
-    sol.angle = Some(best.map_or(raw, |b| b.to));
+    sol.angle = Some(best.map_or(raw, |b| b.to)).filter(|a| a.is_finite());
     if let Some(b) = best {
         sol.hits.push(HitRec::Angle(b));
     }
@@ -124,5 +144,6 @@ mod tests {
         assert!((wrap(3.0 * p + 0.2, p) - 0.2).abs() < 1e-12);
         assert!(on_lattice(0.5 + 3.0 * 0.25, 0.25, 0.0, 1e-9) && !on_lattice(0.51, 0.25, 0.0, 1e-9));
         assert!(on_lattice(-0.25, 0.25, 0.0, 1e-9));
+        assert!(!on_lattice(f64::NAN, 0.25, 0.0, 1e-9) && !on_lattice(1.0, 0.0, 0.0, 1e-9) && !on_lattice(f64::INFINITY, 0.25, 0.0, 1e9));
     }
 }

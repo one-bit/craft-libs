@@ -218,7 +218,14 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
         let sets: Vec<_> = dir.sets.iter().filter(|set| cx.rule(set.kind).on && matches(cx, set.kind, side)).collect();
         for set in sets {
             cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(set.entries.len()));
-            out.extend(ahead_in(cx, &set.entries, s, up).map(|e| Found { kind: set.kind, id: e.id, c: e.offset, count: e.count, lo: e.lo, hi: e.hi }));
+            out.extend(ahead_in(cx, &set.entries, s, up).map(|e| Found {
+                kind: set.kind,
+                id: e.id,
+                c: e.offset,
+                count: e.count,
+                lo: e.lo,
+                hi: e.hi,
+            }));
         }
     }
     if let Some(r) = cx.s.align_reach.filter(|r| !matches!(r, Reach::Any)) {

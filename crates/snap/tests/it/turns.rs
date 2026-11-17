@@ -60,7 +60,10 @@ fn a_match_within_reach_beats_the_step_when_the_angle_ranks_first_and_not_otherw
 fn a_hard_lattice_allows_only_angles_on_it_and_a_match_off_it_is_not_taken() {
     let t = turned_scene(&[33f64.to_radians()]);
     let s = Settings::default();
-    let q = craft_snap::Query { constraint: Constraint::Angles { step: 15f64.to_radians(), zero: 0.0 }, ..query(rotate(31.0f64.to_radians(), 150.0, None), &s) };
+    let q = craft_snap::Query {
+        constraint: Constraint::Angles { step: 15f64.to_radians(), zero: 0.0 },
+        ..query(rotate(31.0f64.to_radians(), 150.0, None), &s)
+    };
     let r = run(&t, &q);
     assert!((r.angle.unwrap() - 30f64.to_radians()).abs() < 1e-12, "{:?}", r.angle);
     r.check(&t, &q).unwrap();
@@ -135,5 +138,99 @@ mod nudges {
         r.check(&t, &q).unwrap();
         assert!(r.delta.x > 0.0 && r.delta.x < 100.0, "{:?}", r.delta);
         assert!(!r.hits.is_empty());
+    }
+}
+
+mod hostile {
+    use craft_snap::{Budget, Constraint, Id, Kind, Limits, Object, Parts, Refusal, Settings, Subject, TargetsBuilder};
+    use kurbo::Point;
+
+    use crate::common::*;
+
+    fn scene_at(angle: f64) -> craft_snap::Targets {
+        let mut b = TargetsBuilder::new(Limits::default());
+        b.object(Id(1), Object { frame: frame(0.0, 0.0, 5.0, 5.0, angle), angle: None, parts: Parts::ALL }).unwrap();
+        b.build()
+    }
+
+    fn rot(angle: f64, step: Option<(f64, f64)>) -> Subject<'static> {
+        Subject::Rotate { pivot: Point::ORIGIN, angle, radius: 150.0, step }
+    }
+
+    /// Whether `a` is on the lattice within the same tolerance the crate reads: the angle tolerance, or the relative one at large angles.
+    fn on(a: f64, step: f64, zero: f64) -> bool {
+        let co = craft_snap::Coincide::default();
+        let x = ((a - zero) + 0.5 * step).rem_euclid(step) - 0.5 * step;
+        a.is_finite() && x.abs() <= co.angle.max(co.rel * a.abs().max(zero.abs()))
+    }
+
+    #[test]
+    fn a_hard_lattice_result_is_on_the_lattice_at_every_size_of_angle() {
+        let step = std::f64::consts::TAU / 4.0;
+        let t = scene_at(0.0);
+        let s = Settings::default();
+        for base in [1.0e3, 1.0e8, 1.0e12, 1.0e15] {
+            for i in 0..300 {
+                let raw = base + f64::from(i) * 0.37;
+                let q = craft_snap::Query { constraint: Constraint::Angles { step, zero: 0.0 }, ..query(rot(raw, None), &s) };
+                let r = run(&t, &q);
+                if let Some(a) = r.angle {
+                    assert!(on(a, step, 0.0), "{raw}: {a}");
+                }
+                r.check(&t, &q).unwrap_or_else(|b| panic!("{raw}: {b:?}"));
+            }
+        }
+    }
+
+    #[test]
+    fn hostile_angles_and_steps_never_give_a_result_that_is_not_a_number() {
+        let t = scene_at(0.3);
+        let s = Settings::default();
+        let tiny = Some((1.0e-300, 0.0));
+        for raw in [1.0e300, -1.0e300, f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 1.0e308, f64::MAX] {
+            for (constraint, step) in [
+                (Constraint::None, None),
+                (Constraint::None, tiny),
+                (Constraint::Angles { step: 1.0e-300, zero: 0.0 }, None),
+                (Constraint::Angles { step: 0.5, zero: 1.0e300 }, None),
+            ] {
+                let q = craft_snap::Query { constraint, ..query(rot(raw, step), &s) };
+                let r = run(&t, &q);
+                assert!(r.angle.is_none_or(f64::is_finite), "{raw} {constraint:?} {step:?}: {:?}", r.angle);
+                assert!(r.hits.iter().all(|h| h.distance.is_finite()), "{raw}: {:?}", r.hits);
+                for m in &r.marks {
+                    if let craft_snap::Mark::Angle { angle, .. } = m {
+                        assert!(angle.is_finite());
+                    }
+                }
+                r.check(&t, &q).unwrap_or_else(|b| panic!("{raw} {constraint:?} {step:?}: {b:?}"));
+            }
+        }
+        let q = query(rot(f64::NAN, None), &s);
+        let r = run(&t, &q);
+        assert_eq!((r.angle, r.work.refused), (None, Some(Refusal::NotFinite)));
+        // A hard lattice no finite angle lies on: no angle, and the reason.
+        let q = craft_snap::Query { constraint: Constraint::Angles { step: 1.0e-300, zero: 0.0 }, ..query(rot(1.0e300, None), &s) };
+        let r = run(&t, &q);
+        assert_eq!((r.angle, r.work.refused), (None, Some(Refusal::NotFinite)));
+    }
+
+    #[test]
+    fn the_angle_mark_is_charged_to_the_marks_budget_like_every_other_mark() {
+        let t = scene_at(33f64.to_radians());
+        let s = Settings::default();
+        let with = |marks: u32| {
+            let q = craft_snap::Query { budget: Budget { marks, ..Budget::default() }, ..query(rot(33f64.to_radians() + 0.001, None), &s) };
+            (run(&t, &q), q)
+        };
+        let (r, q) = with(1);
+        assert_eq!(r.marks.len(), 1);
+        assert!(!r.work.truncated);
+        r.check(&t, &q).unwrap();
+        let (r, q) = with(0);
+        assert!(r.marks.is_empty(), "{:?}", r.marks);
+        assert!(r.work.truncated && r.work.cut.has(craft_snap::Cuts::MARKS));
+        r.check(&t, &q).unwrap();
+        assert_eq!(r.hits.first().map(|h| h.kind), Some(Kind::Angle), "the hit is still reported");
     }
 }

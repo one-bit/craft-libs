@@ -204,6 +204,16 @@ fn rounding(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
     Ok(())
 }
 
+/// A turn under a hard lattice lands on it.
+fn hard_lattice(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
+    let (Constraint::Angles { step, zero }, Some(a)) = (q.constraint, snapped.angle) else { return Ok(()) };
+    if matches!(q.subject, Subject::Rotate { .. }) && !crate::angle::on_lattice(a, step, zero, crate::angle::tolerance(&q.settings.coincide, a, zero))
+    {
+        return broken("a turn under a hard lattice is not on it", a);
+    }
+    Ok(())
+}
+
 /// The angle of a moved subject is the subject's, to the bit.
 fn angle_unchanged(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
     let before = match q.subject {
@@ -226,8 +236,21 @@ fn hits_have_marks(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
         let found = snapped.marks.iter().any(|m| match (h.kind, m) {
             (Kind::Spacing, Mark::Gap { direction, hit: true, .. }) => h.direction.is_none_or(|d| same_direction(direction.angle(), d.angle(), co)),
             (Kind::Size, Mark::Size { hit: true, .. }) | (Kind::Angle | Kind::AngleStep, Mark::Angle { hit: true, .. }) => true,
-            (Kind::Point(_) | Kind::Corner | Kind::SideMiddle | Kind::Vertex | Kind::Midpoint | Kind::Nearest | Kind::Intersection | Kind::Tangent | Kind::Perpendicular, Mark::Place { hit: true, .. }) => true,
-            (k, Mark::Line { direction, kinds, hit: true, .. }) => h.direction.is_some_and(|d| same_direction(direction.angle(), d.angle(), co)) && kinds.contains(&k),
+            (
+                Kind::Point(_)
+                | Kind::Corner
+                | Kind::SideMiddle
+                | Kind::Vertex
+                | Kind::Midpoint
+                | Kind::Nearest
+                | Kind::Intersection
+                | Kind::Tangent
+                | Kind::Perpendicular,
+                Mark::Place { hit: true, .. },
+            ) => true,
+            (k, Mark::Line { direction, kinds, hit: true, .. }) => {
+                h.direction.is_some_and(|d| same_direction(direction.angle(), d.angle(), co)) && kinds.contains(&k)
+            }
             _ => false,
         });
         if !found {
@@ -245,7 +268,11 @@ fn angle_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result
         return broken("an angle mark is not the final angle", m);
     }
     if let Some(id) = matched {
-        let ok = t.objects.iter().any(|o| o.id == *id && o.parts.angle && crate::angle::wrap(o.angle.unwrap_or(o.frame.angle) - angle, p).abs() <= co.angle);
+        let ok = t.objects.iter().any(|o| {
+            o.id == *id
+                && o.parts.angle
+                && crate::angle::wrap(o.angle.unwrap_or(o.frame.angle) - angle, p).abs() <= crate::angle::tolerance(co, *angle, 0.0)
+        });
         if !ok {
             return broken("an angle mark names an object that does not have the angle", m);
         }
@@ -256,7 +283,7 @@ fn angle_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result
             (Subject::Rotate { step: Some((_, z)), .. }, _) => z,
             _ => return broken("an angle mark has a step but the query has none", m),
         };
-        if !crate::angle::on_lattice(*angle, *st, zero, co.angle) {
+        if !crate::angle::on_lattice(*angle, *st, zero, crate::angle::tolerance(co, *angle, zero)) {
             return broken("an angle mark's angle is not a whole number of steps", m);
         }
     }
@@ -346,7 +373,8 @@ fn gap_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(
     if !(left && right) {
         return broken("an end of a gap mark is not on a facing side of an object", m);
     }
-    let chain_values: Vec<f64> = snapped.marks.iter().filter_map(|x| if let Mark::Gap { chain: c, value: v, .. } = x { (c == chain).then_some(*v) } else { None }).collect();
+    let chain_values: Vec<f64> =
+        snapped.marks.iter().filter_map(|x| if let Mark::Gap { chain: c, value: v, .. } = x { (c == chain).then_some(*v) } else { None }).collect();
     if chain_values.iter().any(|v| !co.same(*v, *value)) {
         return broken("a chain holds gaps of different values", m);
     }
@@ -361,7 +389,11 @@ impl Snapped {
         if self.work.refused.is_some() {
             return if self.delta == Vec2::ZERO && self.marks.is_empty() { Ok(()) } else { broken("a refused query moved the subject", &self.delta) };
         }
+        if self.angle.is_some_and(|a| !a.is_finite()) {
+            return broken("the angle is not a finite number", self.angle);
+        }
         angle_unchanged(self, query)?;
+        hard_lattice(self, query)?;
         constraint(self, query)?;
         rounding(self, query)?;
         resized(self, query, targets)?;

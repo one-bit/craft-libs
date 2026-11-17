@@ -231,16 +231,44 @@ pub(crate) fn gap_marks(cx: &mut Ctx<'_>, sol: &Solution, frame: &TurnedBox, pro
     let mut recs: Vec<GapRec> = lay
         .gaps
         .iter()
-        .map(|(g, l, r)| GapRec { value: *g, left: Some(l.id), right: Some(r.id), from: l.hi, to: r.lo, c0: l.c0.max(r.c0), c1: l.c1.min(r.c1), subject: false })
+        .map(|(g, l, r)| GapRec {
+            value: *g,
+            left: Some(l.id),
+            right: Some(r.id),
+            from: l.hi,
+            to: r.lo,
+            c0: l.c0.max(r.c0),
+            c1: l.c1.min(r.c1),
+            subject: false,
+        })
         .collect();
     let mut mine = Vec::new();
     if let Some(b) = b.filter(|b| row.lo - b.hi > co.tol(row.lo, b.hi)) {
-        mine.push(GapRec { value: row.lo - b.hi, left: Some(b.id), right: None, from: b.hi, to: row.lo, c0: b.c0.max(row.c0), c1: b.c1.min(row.c1), subject: true });
+        mine.push(GapRec {
+            value: row.lo - b.hi,
+            left: Some(b.id),
+            right: None,
+            from: b.hi,
+            to: row.lo,
+            c0: b.c0.max(row.c0),
+            c1: b.c1.min(row.c1),
+            subject: true,
+        });
     }
     if let Some(a) = a.filter(|a| a.lo - row.hi > co.tol(a.lo, row.hi)) {
-        mine.push(GapRec { value: a.lo - row.hi, left: None, right: Some(a.id), from: row.hi, to: a.lo, c0: a.c0.max(row.c0), c1: a.c1.min(row.c1), subject: true });
+        mine.push(GapRec {
+            value: a.lo - row.hi,
+            left: None,
+            right: Some(a.id),
+            from: row.hi,
+            to: a.lo,
+            c0: a.c0.max(row.c0),
+            c1: a.c1.min(row.c1),
+            subject: true,
+        });
     }
-    let equal_to_other = |g: &GapRec, all: &[GapRec], others: &[GapRec]| all.iter().chain(others.iter()).any(|o| !std::ptr::eq(o, g) && co.same(o.value, g.value));
+    let equal_to_other =
+        |g: &GapRec, all: &[GapRec], others: &[GapRec]| all.iter().chain(others.iter()).any(|o| !std::ptr::eq(o, g) && co.same(o.value, g.value));
     let values: Vec<f64> = mine.iter().filter(|g| equal_to_other(g, &recs, &mine)).map(|g| g.value).collect();
     if values.is_empty() {
         return Vec::new();

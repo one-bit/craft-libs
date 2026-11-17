@@ -157,15 +157,22 @@ fn size_marks(cx: &mut Ctx<'_>, sol: &Solution, frame: &TurnedBox, moving: &crat
 
 /// The angle mark of a turn: the final angle against other objects' angles and against the lattice of steps.
 fn angle_mark(cx: &mut Ctx<'_>, sol: &Solution, pivot: kurbo::Point, step: Option<(f64, f64)>) -> Option<Mark> {
-    let a = sol.angle?;
+    let a = sol.angle.filter(|a| a.is_finite())?;
     let p = cx.s.angle_period;
     let t = cx.t;
     let arr = t.angles(p, &mut cx.work.made).unwrap_or(&[]);
     cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(crate::index::log_steps(arr.len()));
     let a_f = a.rem_euclid(p);
-    let same = |l: &crate::index::Length| crate::angle::wrap(l.length - a_f, p).abs() <= cx.co.angle;
+    let tol = crate::angle::tolerance(&cx.co, a, 0.0);
+    let same = |l: &crate::index::Length| crate::angle::wrap(l.length - a_f, p).abs() <= tol;
     let i = arr.partition_point(|l| l.length < a_f);
-    let named = [i.checked_sub(1), Some(i), Some(0), arr.len().checked_sub(1)].into_iter().flatten().filter_map(|j| arr.get(j)).filter(|l| same(l)).map(|l| l.id).min();
+    let named = [i.checked_sub(1), Some(i), Some(0), arr.len().checked_sub(1)]
+        .into_iter()
+        .flatten()
+        .filter_map(|j| arr.get(j))
+        .filter(|l| same(l))
+        .map(|l| l.id)
+        .min();
     let hit = sol.hits.iter().find_map(|h| match h {
         HitRec::Angle(x) => Some(*x),
         _ => None,
@@ -174,7 +181,9 @@ fn angle_mark(cx: &mut Ctx<'_>, sol: &Solution, pivot: kurbo::Point, step: Optio
         crate::query::Constraint::Angles { step, zero } => Some((step, zero)),
         _ => None,
     };
-    let lattice = hard.or(step).filter(|(st, z)| crate::angle::on_lattice(a, *st, *z, cx.co.angle) && (hard.is_some() || cx.rule(Kind::AngleStep).on));
+    let lattice = hard.or(step).filter(|(st, z)| {
+        crate::angle::on_lattice(a, *st, *z, crate::angle::tolerance(&cx.co, a, *z)) && (hard.is_some() || cx.rule(Kind::AngleStep).on)
+    });
     let matched = named.filter(|_| cx.rule(Kind::Angle).on);
     if matched.is_none() && lattice.is_none() {
         return None;
@@ -188,7 +197,12 @@ pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
     let mut out = Vec::new();
     if let Subject::Rotate { pivot, step, .. } = cx.q.subject {
         let hit_only = cx.s.marks == MarkRule::HitsOnly;
-        out.extend(angle_mark(cx, sol, pivot, step).filter(|m| !hit_only || matches!(m, Mark::Angle { hit: true, .. })));
+        let mark = angle_mark(cx, sol, pivot, step).filter(|m| !hit_only || matches!(m, Mark::Angle { hit: true, .. }));
+        // The angle mark pays the marks budget like every other mark.
+        let (cap, mut spent) = (u64::from(cx.budget().marks), 0u64);
+        if let Some(m) = mark.filter(|_| Work::charge(&mut spent, cap, 1, &mut cx.work.cut, &mut cx.work.truncated, Cuts::MARKS)) {
+            out.push(m);
+        }
         return out;
     }
     let cap = u64::from(cx.budget().marks);
