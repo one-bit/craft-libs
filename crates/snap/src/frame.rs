@@ -364,4 +364,43 @@ mod tests {
         assert_eq!((x, y), (u.reversed(), v.reversed()));
         assert!(to_page_axes(&TurnedBox { angle: 0.1, ..b }, u, v, 1e-9).is_none());
     }
+
+    #[test]
+    fn two_points_are_one_place_only_if_both_their_coordinates_are() {
+        let co = Coincide::default();
+        assert!(co.same_point(Point::new(1.0, 2.0), Point::new(1.0 + 1e-12, 2.0)));
+        assert!(!co.same_point(Point::new(1.0, 2.0), Point::new(1.0, 5.0)));
+        assert!(!co.same_point(Point::new(1.0, 2.0), Point::new(7.0, 2.0)));
+    }
+
+    #[test]
+    fn a_fold_is_never_outside_its_range_whatever_the_rounding_does() {
+        // Angles whose quotient by pi rounds up to a whole number leave a hair under zero, and one so small that the sum is pi leaves exactly pi.
+        let (a, _) = fold(53.40707511102648);
+        assert_eq!(a, 0.0);
+        let (a, flipped) = fold(-1.0e-323);
+        assert_eq!((a, flipped), (0.0, false));
+        for k in -40..40 {
+            let (a, _) = fold(k as f64 * PI + 1.0e-16);
+            assert!((0.0..PI).contains(&a), "{k}: {a}");
+        }
+    }
+
+    #[test]
+    fn the_bounds_of_a_turned_box_are_its_corners_extent() {
+        let b = TurnedBox { centre: Point::new(1.0, -2.0), size: Size::new(6.0, 4.0), angle: 0.5 };
+        let r = b.bounds();
+        let c = b.corners();
+        let (x0, x1) = (c.iter().map(|p| p.x).fold(f64::INFINITY, f64::min), c.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max));
+        let (y0, y1) = (c.iter().map(|p| p.y).fold(f64::INFINITY, f64::min), c.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max));
+        assert!((r.x0 - x0).abs() < 1e-12 && (r.x1 - x1).abs() < 1e-12 && (r.y0 - y0).abs() < 1e-12 && (r.y1 - y1).abs() < 1e-12, "{r:?} {c:?}");
+    }
+
+    #[test]
+    fn a_quarter_count_beyond_a_billion_turns_is_not_one() {
+        let b = TurnedBox { centre: Point::ORIGIN, size: Size::new(1.0, 1.0), angle: 1.0e9 * FRAC_PI_2 };
+        assert_eq!(b.quarter(1.0), None);
+        let ok = TurnedBox { angle: 999_999_999.0 * FRAC_PI_2, ..b };
+        assert!(ok.quarter(1.0).is_some());
+    }
 }

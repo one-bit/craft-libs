@@ -62,4 +62,18 @@ mod tests {
         assert_eq!(one_two_five(f64::NAN), 1.0);
         assert!(one_two_five(1.0e300).is_finite());
     }
+
+    #[test]
+    fn a_pitch_that_is_just_the_minimum_on_the_screen_is_kept() {
+        assert_eq!(doubling(2.0, 8.0, 1.0), Some(8.0));
+        assert_eq!(doubling(1.0, 8.0, 2.0), Some(4.0));
+        assert_eq!(doubling(10.0, 8.0, 1.0), Some(10.0));
+    }
+
+    #[test]
+    fn a_one_two_five_pitch_is_the_smallest_of_them_that_holds_the_minimum() {
+        for (min, want) in [(0.3, 0.5), (3.0, 5.0), (7.0, 10.0), (1.0, 1.0), (2.0, 2.0), (5.0, 5.0), (12.0, 20.0), (0.012, 0.02)] {
+            assert!((one_two_five(min) - want).abs() < 1e-12, "{min}: {}", one_two_five(min));
+        }
+    }
 }

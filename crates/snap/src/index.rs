@@ -735,4 +735,182 @@ mod tests {
         let u = DirTable::build(lines, &co);
         assert_eq!(format!("{:?}", u.dirs), format!("{:?}", t.dirs), "insertion order does not matter");
     }
+
+    #[test]
+    fn an_angle_just_under_the_half_turn_folds_to_just_under_zero_and_the_one_on_the_edge_does_not() {
+        let eps = 1.0e-9;
+        let (a, flipped) = canon(PI - eps, eps);
+        assert_eq!((a, flipped), (PI - eps, false), "exactly on the edge it stays");
+        let (a, flipped) = canon(PI - 0.5 * eps, eps);
+        assert!(a < 0.0 && flipped);
+    }
+
+    #[test]
+    fn a_tie_goes_to_the_lower_id_wherever_the_two_lines_are_and_a_line_with_an_id_beats_one_without() {
+        let co = Coincide::default();
+        let set_of = |lines: Vec<RawLine>| DirTable::build(lines, &co).dirs.into_iter().next().and_then(|d| d.sets.into_iter().next()).unwrap();
+        let id_at = |set: &Set, q: f64| set.nearest(q).and_then(|i| set.entries.get(i)).map(|e| e.id);
+        // 3 below and 3 above the query at 0: the lower id wins whichever side it is on.
+        let a = set_of(vec![raw(0.0, -3.0, Kind::Guide, 9), raw(0.0, 3.0, Kind::Guide, 2)]);
+        assert_eq!(id_at(&a, 0.0), Some(Some(Id(2))));
+        let b = set_of(vec![raw(0.0, -3.0, Kind::Guide, 2), raw(0.0, 3.0, Kind::Guide, 9)]);
+        assert_eq!(id_at(&b, 0.0), Some(Some(Id(2))));
+        // A line that has an id beats one that has none, on either side.
+        let none = |offset: f64| RawLine { id: None, ..raw(0.0, offset, Kind::Guide, 0) };
+        let c = set_of(vec![none(-3.0), raw(0.0, 3.0, Kind::Guide, 7)]);
+        assert_eq!(id_at(&c, 0.0), Some(Some(Id(7))));
+        let d = set_of(vec![raw(0.0, -3.0, Kind::Guide, 7), none(3.0)]);
+        assert_eq!(id_at(&d, 0.0), Some(Some(Id(7))));
+        assert!(id_before(Some(Id(1)), Some(Id(2))) && !id_before(Some(Id(2)), Some(Id(1))) && !id_before(Some(Id(1)), Some(Id(1))));
+        assert!(id_before(Some(Id(1)), None) && !id_before(None, Some(Id(1))) && !id_before(None, None));
+    }
+
+    #[test]
+    fn lines_at_one_place_are_named_by_the_lowest_id_whatever_order_they_came_in() {
+        let co = Coincide::default();
+        // The lines are a hair apart, inside the tolerance, so they sort by offset and not by id, and the lowest id is the last to come.
+        for ids in [[5, 4, 3], [3, 4, 5], [4, 5, 3]] {
+            let lines: Vec<RawLine> = ids.iter().enumerate().map(|(i, id)| raw(0.0, 2.0 + i as f64 * 2.0e-10, Kind::Guide, *id)).collect();
+            let entries = DirTable::build(lines, &co).all_entries();
+            assert_eq!(entries.len(), 1, "{ids:?}");
+            assert_eq!((entries[0].2.id, entries[0].2.count), (Some(Id(3)), 3), "{ids:?}");
+        }
+        let mixed = [RawLine { id: None, ..raw(0.0, 2.0, Kind::Guide, 0) }, raw(0.0, 2.0 + 2.0e-10, Kind::Guide, 8)];
+        assert_eq!(DirTable::build(mixed.to_vec(), &co).all_entries()[0].2.id, Some(Id(8)));
+        let mixed = [raw(0.0, 2.0, Kind::Guide, 8), RawLine { id: None, ..raw(0.0, 2.0 + 2.0e-10, Kind::Guide, 0) }];
+        assert_eq!(DirTable::build(mixed.to_vec(), &co).all_entries()[0].2.id, Some(Id(8)));
+    }
+
+    #[test]
+    fn the_nearest_member_of_a_group_is_the_one_with_the_smallest_gap_to_the_extent() {
+        let co = Coincide::default();
+        let member = |id: u64, lo: f64, hi: f64| RawLine { lo, hi, ..raw(0.0, 1.0, Kind::Edge, id) };
+        let t = DirTable::build(vec![member(1, 0.0, 10.0), member(2, 19.0, 30.0)], &co);
+        let set = t.dirs[0].sets[0].clone();
+        let e = set.entries[0];
+        assert_eq!(e.count, 2);
+        // The extent 15 to 16 is 5 from the first member and 3 from the second.
+        assert_eq!(set.nearest_span(&e, (15.0, 16.0)), (19.0, 30.0));
+        // 11 to 12 is 1 from the first and 7 from the second.
+        assert_eq!(set.nearest_span(&e, (11.0, 12.0)), (0.0, 10.0));
+        // Inside the first member's reach the gap is none.
+        assert_eq!(set.nearest_span(&e, (4.0, 6.0)), (0.0, 10.0));
+        // An extent that is not a range is the union.
+        assert_eq!(set.nearest_span(&e, (16.0, 15.0)), (e.lo, e.hi));
+        // Two members that end together: the first of them is the one kept.
+        let t = DirTable::build(vec![member(1, 0.0, 10.0), member(2, 5.0, 10.0)], &co);
+        let set = t.dirs[0].sets[0].clone();
+        assert_eq!(set.nearest_span(&set.entries[0], (12.0, 13.0)), (0.0, 10.0));
+    }
+
+    #[test]
+    fn a_grid_gives_the_boxes_nearest_the_middle_of_the_window_first() {
+        // One box on each side of the window's middle at 0, each a different distance from it.
+        let items = vec![
+            cell(1, 3.0, -0.5, 1.0, 1.0),
+            cell(2, -6.0, -0.5, 1.0, 1.0),
+            cell(3, -0.5, 4.0, 1.0, 1.0),
+            cell(4, -0.5, -8.0, 1.0, 1.0),
+            cell(5, -0.5, -0.5, 1.0, 1.0),
+        ];
+        let g = Grid::build(items);
+        let found = g.gather(&Rect::new(-10.0, -10.0, 10.0, 10.0), 10, 1000);
+        let ids: Vec<u64> = found.items.iter().map(|c| c.id.0).collect();
+        assert_eq!(ids, vec![5, 1, 3, 2, 4]);
+        assert!(!found.cut);
+        // With room for fewer than there are, the cut is said, and not before.
+        assert!(g.gather(&Rect::new(-10.0, -10.0, 10.0, 10.0), 4, 1000).cut);
+        assert!(!g.gather(&Rect::new(-10.0, -10.0, 10.0, 10.0), 5, 1000).cut);
+    }
+
+    #[test]
+    fn a_box_of_no_size_does_not_make_the_buckets_no_size() {
+        let mut items: Vec<Cell> = (0..3).map(|i| cell(i, i as f64, 0.0, 0.0, 0.0)).collect();
+        items.push(cell(9, 0.0, 5.0, 2.0, 1.0));
+        let g = Grid::build(items);
+        assert_eq!(g.cell, 4.0);
+    }
+
+    #[test]
+    fn a_box_over_sixteen_buckets_is_on_the_list_every_window_reads_and_one_over_fewer_is_not() {
+        // The buckets are 2 wide (the median of the sides is 1): a box 1 deep and 32 wide covers 17 of them across, and 30 wide covers 16.
+        let mut items: Vec<Cell> = (0..20).map(|i| cell(i, 100.0 + i as f64 * 10.0, 100.0, 1.0, 1.0)).collect();
+        items.push(cell(100, 0.1, 0.1, 30.0, 0.5));
+        let g = Grid::build(items.clone());
+        assert_eq!(g.big_len(), 0, "16 buckets across and one deep");
+        items.push(cell(101, 0.1, 50.1, 33.0, 0.5));
+        let g = Grid::build(items);
+        assert_eq!(g.big_len(), 1, "17 across");
+    }
+
+    #[test]
+    fn the_windows_of_every_shape_give_what_a_scan_gives() {
+        let items: Vec<Cell> = (0..500u64)
+            .map(|i| cell(i, ((i * 37) % 211) as f64 * 0.9 - 40.0, ((i * 53) % 193) as f64 * 0.8 - 30.0, 0.3 + (i % 5) as f64, 0.2 + (i % 4) as f64))
+            .collect();
+        let g = Grid::build(items.clone());
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for _ in 0..300 {
+            let (x, y) = (next() * 200.0 - 60.0, next() * 160.0 - 50.0);
+            let (w, h) = (next() * 14.0 * g.cell, next() * 14.0 * g.cell);
+            let window = Rect::new(x, y, x + w, y + h);
+            let found = g.gather(&window, 10_000, 1_000_000);
+            let mut got: Vec<u64> = found.items.iter().map(|c| c.id.0).collect();
+            got.sort_unstable();
+            let mut want: Vec<u64> = items.iter().filter(|c| meets(&c.bounds, &window)).map(|c| c.id.0).collect();
+            want.sort_unstable();
+            assert_eq!(got, want, "{window:?}");
+            assert!(!found.cut, "{window:?}");
+        }
+    }
+
+    #[test]
+    fn a_window_past_the_bound_is_cut_to_the_buckets_round_its_middle_and_says_so() {
+        // Boxes 1 wide, so buckets 2 wide: one box in each of 200 buckets along a row, and one in each of 200 along a column.
+        let mut items: Vec<Cell> = (0..200u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
+        items.extend((0..200u64).map(|i| cell(1000 + i, 1000.5, i as f64 * 2.0 + 0.5, 1.0, 1.0)));
+        let g = Grid::build(items);
+        assert_eq!(g.cell, 2.0);
+        // Buckets 0 to 99 across: 100 of them, cut to the 48 about the middle (buckets 25 to 72).
+        let found = g.gather(&Rect::new(0.0, 0.0, 199.9, 1.0), 1000, 100_000);
+        let mut ids: Vec<u64> = found.items.iter().map(|c| c.id.0).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (25..=72).collect::<Vec<u64>>());
+        assert!(found.cut);
+        // The same down a column.
+        let found = g.gather(&Rect::new(1000.0, 0.0, 1001.0, 199.9), 1000, 100_000);
+        let mut ids: Vec<u64> = found.items.iter().map(|c| c.id.0).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (1025..=1072).collect::<Vec<u64>>());
+        assert!(found.cut);
+        // Exactly 48 across is not cut, and 49 is.
+        assert!(!g.gather(&Rect::new(0.0, 0.0, 95.9, 1.0), 1000, 100_000).cut);
+        assert!(g.gather(&Rect::new(0.0, 0.0, 97.9, 1.0), 1000, 100_000).cut);
+    }
+
+    #[test]
+    fn when_the_visits_run_out_the_buckets_kept_are_those_round_the_middle_of_the_window() {
+        // Forty-one boxes in a row, one to a bucket; a window over all of them and room to look at five.
+        let items: Vec<Cell> = (0..41u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
+        let g = Grid::build(items);
+        assert_eq!(g.cell, 2.0);
+        let found = g.gather(&Rect::new(0.0, 0.0, 81.9, 1.0), 100, 5);
+        let mut ids: Vec<u64> = found.items.iter().map(|c| c.id.0).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![18, 19, 20, 21, 22]);
+        assert!(found.cut);
+        // The same down a column and with the window not on the origin.
+        let items: Vec<Cell> = (0..41u64).map(|i| cell(i, -500.0 + 0.5, -300.0 + i as f64 * 2.0 + 0.5, 1.0, 1.0)).collect();
+        let g = Grid::build(items);
+        let found = g.gather(&Rect::new(-500.0, -300.0, -499.0, -218.1), 100, 5);
+        let mut ids: Vec<u64> = found.items.iter().map(|c| c.id.0).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![18, 19, 20, 21, 22]);
+    }
 }

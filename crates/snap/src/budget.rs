@@ -236,4 +236,29 @@ mod tests {
         assert!(w.truncated && w.cut.has(Cuts::MARKS) && !w.cut.has(Cuts::ROW));
         assert!(Made(Made::BUCKETS).has(Made::BUCKETS) && !Made(0).has(Made::BUCKETS));
     }
+
+    #[test]
+    fn each_cap_and_each_index_has_a_bit_of_its_own() {
+        let cuts = [
+            Cuts::WINDOW_VISITS,
+            Cuts::CANDIDATES,
+            Cuts::OWN,
+            Cuts::LINE_STEPS,
+            Cuts::SOLVES,
+            Cuts::POINTS,
+            Cuts::OUTLINES,
+            Cuts::PIECES,
+            Cuts::PAIRS,
+            Cuts::ROW,
+            Cuts::MARKS,
+            Cuts::DETAIL,
+        ];
+        assert!(cuts.iter().all(|c| c.count_ones() == 1), "{cuts:?}");
+        assert_eq!(cuts.iter().fold(0u16, |all, c| all | c).count_ones() as usize, cuts.len(), "no two share a bit");
+        let made = [Made::OBJECT_LINES, Made::BUCKETS, Made::LENGTHS, Made::ANGLES, Made::POINTS];
+        assert!(made.iter().all(|m| m.count_ones() == 1), "{made:?}");
+        assert_eq!(made.iter().fold(0u8, |all, m| all | m).count_ones() as usize, made.len());
+        assert!(!Cuts::default().any());
+        assert!(Cuts(Cuts::MARKS).any() && Cuts(Cuts::MARKS).has(Cuts::MARKS) && !Cuts(Cuts::MARKS).has(Cuts::ROW));
+    }
 }
