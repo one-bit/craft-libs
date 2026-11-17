@@ -766,6 +766,40 @@ mod own_rows_of_many_turns {
     }
 }
 
+mod oblique_lines {
+    use craft_snap::{Constraint, Direction, Id, Limits, Reach, TargetsBuilder};
+
+    use super::*;
+
+    /// A guide along the own x axis of a box turned by `tilt`, 3 beyond the box's top side: its normal is the box's own y axis, `tilt` off the page's.
+    fn guide_along_the_tilt(tilt: f64) -> craft_snap::Targets {
+        let mut b = TargetsBuilder::new(Limits::default());
+        b.line_at(Some(Id(1)), Direction::new(std::f64::consts::FRAC_PI_2 + tilt).unwrap(), 8.0, None, Kind::Guide).unwrap();
+        b.build()
+    }
+
+    #[test]
+    fn an_axis_locked_box_is_not_thrown_millions_along_its_axis_by_a_guide_nearly_parallel_to_it() {
+        let mut s = Settings::default();
+        let mut rule = s.kinds.rule(Kind::Guide);
+        rule.reach = Reach::Any;
+        s.kinds.set(Kind::Guide, rule);
+        for tilt in [1.0e-6, 1.0e-7, 1.0e-8] {
+            let t = guide_along_the_tilt(tilt);
+            let q = Query { constraint: Constraint::Axis(craft_snap::Axis::X), ..query(box_subject(frame(0.0, 0.0, 10.0, 10.0, tilt)), &s) };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            // To meet the guide along x the box would travel 3 / tilt, millions; it stays within a thousand.
+            assert!(r.delta.hypot() < 1_000.0, "{tilt}: the box was thrown {:?}", r.delta);
+            // Along y the same guide is square on: the box goes to it (3 up), whatever the tilt.
+            let q = Query { constraint: Constraint::Axis(craft_snap::Axis::Y), ..query(box_subject(frame(0.0, 0.0, 10.0, 10.0, tilt)), &s) };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            assert!(r.delta.hypot() < 1_000.0, "{tilt} along y: {:?}", r.delta);
+        }
+    }
+}
+
 mod far_lines_the_check_cannot_tell_apart {
     use super::*;
 

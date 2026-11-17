@@ -341,6 +341,51 @@ mod resizes {
     }
 
     #[test]
+    fn a_rounded_resize_led_along_y_is_asked_for_its_y() {
+        let t = scene(&[], &[], &[]);
+        let s = Settings::default();
+        let want = "a resize's leading point is not on the lattice along the axis it leads on";
+        // The top side of a box 5.7 high from y = -1.75 lands on y = 4 (a step of 1); moved off it by a quarter its middle is on no lattice line in y.
+        // (Its x is 2.3 on no lattice either, but a point that leads along y is not asked for its x: only the y condition can fire here.)
+        for (moving, about_sign) in [(Edges { v_max: true, ..Edges::default() }, 1.0), (Edges { v_min: true, ..Edges::default() }, -1.0)] {
+            let q = craft_snap::Query {
+                rounding: Rounding::Position(vec2(1.0, 1.0)),
+                ..query(Subject::Edges { frame: frame(2.0, 1.1, 8.0, 5.7, 0.0), moving }, &s)
+            };
+            assert_eq!(
+                fires(&t, &q, |r| {
+                    let f = r.frame.as_mut().unwrap();
+                    f.centre.y += about_sign * 0.125;
+                    f.size.height += 0.25;
+                }),
+                want,
+                "{moving:?}"
+            );
+        }
+        // Held about the centre, and with the proportions kept from a side handle, the same.
+        let centred = craft_snap::Query {
+            rounding: Rounding::Position(vec2(1.0, 1.0)),
+            constraint: Constraint::Centre,
+            ..query(Subject::Edges { frame: frame(2.0, 1.1, 8.0, 5.7, 0.0), moving: Edges { v_max: true, ..Edges::default() } }, &s)
+        };
+        assert_eq!(fires(&t, &centred, |r| r.frame.as_mut().unwrap().size.height += 0.25), want);
+        let kept = craft_snap::Query {
+            rounding: Rounding::Position(vec2(1.0, 1.0)),
+            constraint: Constraint::Aspect { ratio: 2.0, about: About::Fixed },
+            ..query(Subject::Edges { frame: frame(2.0, 1.1, 8.0, 4.0, 0.0), moving: Edges { v_max: true, ..Edges::default() } }, &s)
+        };
+        assert_eq!(
+            fires(&t, &kept, |r| {
+                let f = r.frame.as_mut().unwrap();
+                f.centre.y += 0.125;
+                f.size.height += 0.25;
+                f.size.width += 0.5;
+            }),
+            want
+        );
+    }
+
+    #[test]
     fn a_size_mark_is_the_final_length_of_a_side_and_names_an_object_that_has_it() {
         let t = scene(&[(1, frame(100.0, 100.0, 7.0, 2.0, 0.0))], &[], &[]);
         let s = Settings::default();
