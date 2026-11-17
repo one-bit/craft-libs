@@ -183,3 +183,34 @@ fn boxes_that_overlap_in_a_row_give_the_same_gaps_read_from_either_end() {
         assert!(g.len() == 1 && (g[0] - gaps[0]).abs() < 1e-6, "{a}: {g:?} against {gaps:?}");
     }
 }
+
+#[test]
+fn a_row_reads_the_strip_the_reach_describes_and_not_the_box_round_it() {
+    // The window the objects are gathered from is the box round the strip, and a strip across the page has corners that are not in it. An object there
+    // is not a neighbour, and whether it is must not depend on which way the scene is turned.
+    let s = Settings { frames: craft_snap::Frames { page: false, own: true }, align_reach: None, ..Settings::default() };
+    let objs = [frame(-6.5, 1.0, 4.5, 2.0, 1.1), frame(0.0, 0.0, 1.0, 1.0, 1.1)];
+    let subject = frame(7.906768168512113, -2.754056203080976, 3.806493300404496, 2.861341064299773, 1.1);
+    let turn = |f: &craft_snap::TurnedBox, a: f64| {
+        let (sn, c) = a.sin_cos();
+        let d = f.centre.to_vec2();
+        craft_snap::TurnedBox { centre: kurbo::Point::new(c * d.x - sn * d.y, sn * d.x + c * d.y), size: f.size, angle: f.angle + a }
+    };
+    let story = |a: f64| {
+        let numbered: Vec<(u64, craft_snap::TurnedBox)> = objs.iter().enumerate().map(|(i, o)| (i as u64, turn(o, a))).collect();
+        let t = scene(&numbered, &[], &[]);
+        let q = query(box_subject(turn(&subject, a)), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        let gaps = r.marks.iter().filter(|m| matches!(m, Mark::Gap { .. })).count();
+        let mut pulls: Vec<f64> = r.hits.iter().map(|h| h.distance).collect();
+        pulls.sort_by(f64::total_cmp);
+        (gaps, pulls)
+    };
+    let (gaps, pulls) = story(0.0);
+    for a in [0.5, 1.0, 2.0, 3.0, 4.3, 4.5, 4.6, 4.7, 5.5, 6.0] {
+        let (g, p) = story(a);
+        assert_eq!(g, gaps, "{a}");
+        assert!(p.len() == pulls.len() && p.iter().zip(&pulls).all(|(x, y)| (x - y).abs() < 1e-6), "{a}: {p:?} against {pulls:?}");
+    }
+}

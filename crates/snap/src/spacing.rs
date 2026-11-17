@@ -98,6 +98,14 @@ pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bo
             };
             RowObj { id: o.id, lo: l, hi: h, c0: a, c1: b }
         })
+        // The window is the box round the strip, which holds more than the strip when the row runs across the page: the strip is what the reach is.
+        .filter(|o| {
+            let co = &cx.co;
+            o.hi >= lo - reach - co.tol(o.hi, lo - reach)
+                && o.lo <= hi + reach + co.tol(o.lo, hi + reach)
+                && o.c1 >= w0 - co.tol(o.c1, w0)
+                && o.c0 <= w1 + co.tol(o.c0, w1)
+        })
         .collect::<Vec<RowObj>>();
     let objs = match cx.s.spacing_row {
         // An object that only touches the subject's band across (a snap to its edge puts it there) is not in the row, whatever the last bits say.
