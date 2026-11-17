@@ -84,6 +84,48 @@ fn a_full_turn_is_one_and_a_period_of_half_a_turn_matches_across_it() {
     r.check(&t, &q).unwrap();
 }
 
+#[test]
+fn a_match_with_a_reach_of_any_distance_takes_the_angle_however_far_off_it_is() {
+    // Half a turn is the farthest anything is; 1.4 radians is not past it.
+    let t = turned_scene(&[0.0]);
+    let mut s = Settings::default();
+    let mut rule = s.kinds.rule(Kind::Angle);
+    rule.reach = craft_snap::Reach::Any;
+    s.kinds.set(Kind::Angle, rule);
+    let q = query(rotate(1.4, 150.0, None), &s);
+    let r = run(&t, &q);
+    assert_eq!(r.angle, Some(0.0), "{:?}", r.hits);
+    r.check(&t, &q).unwrap();
+}
+
+#[test]
+fn a_pointer_exactly_a_reach_from_the_pivot_aims_at_nothing_and_one_hair_beyond_it_does() {
+    let t = turned_scene(&[33f64.to_radians()]);
+    let s = Settings::default();
+    // Six screen units of reach at zoom 1.
+    let on = query(rotate(31.0f64.to_radians(), 6.0, None), &s);
+    assert!(run(&t, &on).hits.is_empty());
+    let past = query(rotate(31.0f64.to_radians(), 6.0 + 1.0e-6, None), &s);
+    let r = run(&t, &past);
+    assert_eq!(r.angle, Some(33f64.to_radians()));
+    r.check(&t, &past).unwrap();
+}
+
+#[test]
+fn a_step_lattice_is_taken_within_half_a_turn_and_not_beyond_it() {
+    // The steps have the reach of any distance, but a step a turn and a half wide is farther than half a turn from most angles.
+    let t = turned_scene(&[]);
+    let s = Settings::default();
+    let q = query(rotate(1.0, 150.0, Some((2.0, 0.0))), &s);
+    let r = run(&t, &q);
+    assert_eq!(r.angle, Some(2.0), "{:?}", r.hits);
+    r.check(&t, &q).unwrap();
+    let wide = query(rotate(5.0, 150.0, Some((9.42, 0.0))), &s);
+    let r = run(&t, &wide);
+    assert_eq!(r.angle, Some(5.0), "{:?}", r.hits);
+    assert!(r.hits.is_empty());
+}
+
 mod nudges {
     use craft_snap::{Axis, Kind, Mark, Settings, Subject};
     use kurbo::Point;

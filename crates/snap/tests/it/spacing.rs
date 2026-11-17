@@ -214,3 +214,29 @@ fn a_row_reads_the_strip_the_reach_describes_and_not_the_box_round_it() {
         assert!(p.len() == pulls.len() && p.iter().zip(&pulls).all(|(x, y)| (x - y).abs() < 1e-6), "{a}: {p:?} against {pulls:?}");
     }
 }
+
+#[test]
+fn only_the_gap_the_snap_repeated_is_marked_when_the_marks_are_asked_to_be_the_hits() {
+    // Gaps of 20 (A to B) and of 30 (C to D), and the box between B and C with a gap of 20 on one side and of 30 on the other: both are repeated.
+    let objs = [
+        (1, frame(5.0, 0.0, 10.0, 10.0, 0.0)),
+        (2, frame(35.0, 0.0, 10.0, 10.0, 0.0)),
+        (3, frame(105.0, 0.0, 10.0, 10.0, 0.0)),
+        (4, frame(145.0, 0.0, 10.0, 10.0, 0.0)),
+    ];
+    let t = scene(&objs, &[], &[]);
+    let gap_values = |marks: craft_snap::MarkRule| {
+        let s = Settings { marks, ..wide() };
+        let q = query(box_subject(frame(65.2, 0.0, 10.0, 10.0, 0.0)), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        let mut v: Vec<f64> = r.marks.iter().filter_map(|m| if let Mark::Gap { value, .. } = m { Some(*value) } else { None }).collect();
+        v.sort_by(f64::total_cmp);
+        v
+    };
+    let every = gap_values(craft_snap::MarkRule::Coincident);
+    assert_eq!(every.len(), 4, "{every:?}");
+    let hits = gap_values(craft_snap::MarkRule::HitsOnly);
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    assert!((hits[0] - hits[1]).abs() < 1e-9, "the two of the one value: {hits:?}");
+}
