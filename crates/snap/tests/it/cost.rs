@@ -248,24 +248,36 @@ fn the_index_gives_what_a_scan_of_every_line_gives() {
         .map(|i| (i, frame(((i * 7919) % 1009) as f64 * 0.37, ((i * 104_729) % 997) as f64 * 0.41, 1.0 + (i % 6) as f64, 2.0 + (i % 5) as f64, 0.0)))
         .collect();
     let t = scene(&objs, &[12.3, 80.7, 150.0], &[]);
-    for i in 0..60 {
-        let x = f64::from(i) * 6.1 + 0.77;
-        let f = frame(x, 1000.0, 4.0, 2.0, 0.0);
-        let q = craft_snap::Query {
-            constraint: Constraint::Axis(Axis::X),
-            ..query(Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::NONE, own: &[] }, &s)
-        };
-        let r = run(&t, &q);
-        r.check(&t, &q).unwrap();
-        let sides = [x - 2.0, x, x + 2.0];
-        let mut lines: Vec<f64> = vec![12.3, 80.7, 150.0];
-        for (_, o) in &objs {
-            lines.extend([o.centre.x - o.size.width / 2.0, o.centre.x, o.centre.x + o.size.width / 2.0]);
-        }
-        let want = sides.iter().flat_map(|s| lines.iter().map(move |l| l - s)).filter(|d| d.abs() <= 6.0).min_by(|a, b| a.abs().total_cmp(&b.abs()));
-        match want {
-            Some(d) => assert!((r.delta.x - d).abs() < 1e-9 || r.hits.iter().any(|h| h.kind == Kind::Guide), "{x}: scan {d}, got {:?}", r.delta),
-            None => assert!(r.hits.is_empty(), "{x}: {:?}", r.hits),
+    // Anywhere (the sorted arrays), and within a reach across that holds every object (the gather, with room for all of them).
+    for reach in [None, Some(craft_snap::Reach::Document(60.0))] {
+        let s = Settings { align_reach: reach, ..s.clone() };
+        for i in 0..60 {
+            let x = f64::from(i) * 6.1 + 0.77;
+            // Within a reach across, the subject sits among the objects (they run to about 370 along x and 410 along y); anywhere, far off.
+            let y0 = if reach.is_some() { 200.0 } else { 1000.0 };
+            let f = frame(x, y0, 4.0, 2.0, 0.0);
+            let q = craft_snap::Query {
+                constraint: Constraint::Axis(Axis::X),
+                ..query(Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::NONE, own: &[] }, &s)
+            };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            let sides = [x - 2.0, x, x + 2.0];
+            let mut lines: Vec<f64> = vec![12.3, 80.7, 150.0];
+            for (_, o) in &objs {
+                // Within a reach, only the objects whose boxes meet the subject's box grown by it.
+                let near = reach.is_none()
+                    || ((o.centre.x - x).abs() <= o.size.width / 2.0 + 2.0 + 60.0 && (o.centre.y - y0).abs() <= o.size.height / 2.0 + 1.0 + 60.0);
+                if near {
+                    lines.extend([o.centre.x - o.size.width / 2.0, o.centre.x, o.centre.x + o.size.width / 2.0]);
+                }
+            }
+            let want =
+                sides.iter().flat_map(|s| lines.iter().map(move |l| l - s)).filter(|d| d.abs() <= 6.0).min_by(|a, b| a.abs().total_cmp(&b.abs()));
+            match want {
+                Some(d) => assert!((r.delta.x - d).abs() < 1e-9 || r.hits.iter().any(|h| h.kind == Kind::Guide), "{x}: scan {d}, got {:?}", r.delta),
+                None => assert!(r.hits.is_empty(), "{x}: {:?}", r.hits),
+            }
         }
     }
 }
