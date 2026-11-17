@@ -553,6 +553,48 @@ mod reach_across {
     }
 
     #[test]
+    fn a_kind_that_is_off_is_not_marked_within_a_reach_across_and_a_zero_direction_tolerance_still_finds_lines() {
+        // The box's middle is on the object's low edge (0); its centre is 50 away, past any reach; with edges off nothing is hit and nothing is marked.
+        let mut st = settings(100.0);
+        st.kinds.set(Kind::Edge, KindRule { on: false, reach: Reach::Screen(6.0), priority: 3, scope: Scope::All });
+        let t = scene(
+            &[(1, frame(50.0, 0.0, 100.0, 2.0, 0.0)), (2, frame(900.0, 900.0, 2.0, 2.0, 0.0)), (3, frame(950.0, 950.0, 2.0, 2.0, 0.0))],
+            &[],
+            &[],
+        );
+        let q = query(
+            Subject::Box {
+                frame: frame(0.0, 40.0, 2.0, 2.0, 0.0),
+                bounds: None,
+                u: Anchors { min: false, mid: true, max: false },
+                v: Anchors::NONE,
+                own: &[],
+            },
+            &st,
+        );
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(r.hits.is_empty() && r.marks.is_empty(), "{:?} {:?}", r.hits, r.marks);
+        // The same with edges on: the edge is hit, and with a direction tolerance of exactly 0 it is still found (a direction equal to itself is within it).
+        for angle in [1.0e-9, 0.0] {
+            let on = Settings { coincide: craft_snap::Coincide { angle, ..craft_snap::Coincide::default() }, ..settings(100.0) };
+            let q = query(
+                Subject::Box {
+                    frame: frame(0.5, 40.0, 2.0, 2.0, 0.0),
+                    bounds: None,
+                    u: Anchors { min: false, mid: true, max: false },
+                    v: Anchors::NONE,
+                    own: &[],
+                },
+                &on,
+            );
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            assert!(r.hits.iter().any(|h| h.kind == Kind::Edge) && (r.delta.x + 0.5).abs() < 1e-9, "{angle}: {:?} {:?}", r.hits, r.delta);
+        }
+    }
+
+    #[test]
     fn a_kind_that_is_off_gives_no_line_within_a_reach_across() {
         let mut st = settings(100.0);
         st.kinds.set(Kind::Edge, KindRule { on: false, reach: Reach::Screen(6.0), priority: 3, scope: Scope::All });
