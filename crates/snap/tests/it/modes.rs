@@ -680,9 +680,9 @@ mod reach_across {
             let q = craft_snap::Query { budget, ..query(box_subject(frame(60.0, 0.0, 2.0, 2.0, 0.0)), &st) };
             run(&t, &q).work
         };
-        let few = run_with(Budget { candidates: 3, ..Budget::default() });
+        let few = run_with(Budget { candidates: 3, ..craft_snap::Budget::default() });
         assert!(few.cut.has(Cuts::CANDIDATES) && !few.cut.has(Cuts::WINDOW_VISITS), "{few:?}");
-        let short = run_with(Budget { window_visits: 6, ..Budget::default() });
+        let short = run_with(Budget { window_visits: 6, ..craft_snap::Budget::default() });
         assert!(short.cut.has(Cuts::WINDOW_VISITS), "{short:?}");
     }
 }
@@ -855,5 +855,49 @@ mod resize_rounding {
         let out = r.frame.unwrap();
         assert_eq!(out.centre, Point::ORIGIN);
         assert!(on(out.corners()[1].x, 2.0), "{out:?}");
+    }
+}
+
+mod size_marks {
+    use super::*;
+
+    /// `n` objects of width 7 and height 2 that have only a size to offer, spread over the page.
+    fn widths(n: u64) -> craft_snap::Targets {
+        let mut b = TargetsBuilder::new(Limits::default());
+        for i in 0..n {
+            let at = frame(10_000.0 + (i % 400) as f64 * 30.0, 1000.0 + (i / 400) as f64 * 30.0, 7.0, 2.0, 0.0);
+            b.object(Id(i + 10), Object { frame: at, bounds: None, angle: None, parts: Parts { size: true, ..Parts::NONE } }).unwrap();
+        }
+        b.build()
+    }
+
+    #[test]
+    fn the_size_marks_pay_the_marks_budget_like_every_other_mark() {
+        let t = widths(10);
+        let s = Settings::default();
+        for cap in [0u32, 1] {
+            let q = craft_snap::Query {
+                budget: craft_snap::Budget { marks: cap, ..craft_snap::Budget::default() },
+                ..query(Subject::Edges { frame: frame(0.0, 0.0, 7.2, 5.0, 0.0), moving: Edges { u_max: true, v_max: true, ..Edges::default() } }, &s)
+            };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            assert!(r.marks.len() <= cap as usize && r.work.cut.has(Cuts::MARKS), "{cap}: {} marks {:?}", r.marks.len(), r.work);
+        }
+    }
+
+    #[test]
+    fn a_size_snap_keeps_its_mark_when_the_walk_past_the_bisection_has_no_steps_left() {
+        let t = widths(10);
+        let s = Settings::default();
+        let q = craft_snap::Query {
+            budget: craft_snap::Budget { line_steps: 0, ..craft_snap::Budget::default() },
+            ..query(Subject::Edges { frame: frame(0.0, 0.0, 7.2, 5.0, 0.0), moving: Edges { u_max: true, ..Edges::default() } }, &s)
+        };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(r.hits.iter().any(|h| h.kind == Kind::Size), "{:?}", r.hits);
+        assert!(r.marks.iter().any(|m| matches!(m, Mark::Size { hit: true, count: 1, matched: Some(_), .. })), "{:?}", r.marks);
+        assert!(r.work.cut.has(Cuts::LINE_STEPS) && r.work.truncated, "{:?}", r.work);
     }
 }

@@ -171,6 +171,8 @@ fn size_marks(cx: &mut Ctx<'_>, sol: &Solution, frame: &TurnedBox, moving: &crat
             _ => None,
         });
         let (count, named) = equal_lengths(cx, value, width, hit.flatten());
+        // A snap names its match, so it has a mark even when the walk past the bisection was cut before it reached any.
+        let (count, named) = if hit.is_some() { (count.max(1), named.or(hit.flatten())) } else { (count, named) };
         if count == 0 || (cx.s.marks == MarkRule::HitsOnly && hit.is_none()) {
             continue;
         }
@@ -297,7 +299,9 @@ pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
         }
     }
     if let (Subject::Edges { moving, .. }, Some(f)) = (cx.q.subject, sol.frame) {
-        out.extend(size_marks(cx, sol, &f, &moving));
+        let sizes = size_marks(cx, sol, &f, &moving);
+        let n = out.len();
+        out.extend(crate::spacing::within_cap(cx, sizes, n));
     }
     if matches!(cx.q.subject, Subject::Point { .. } | Subject::Box { .. }) {
         let places = place_marks(cx, sol);
