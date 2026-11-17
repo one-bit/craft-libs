@@ -122,6 +122,18 @@ fn flagged(m: &Edges) -> Vec<SideId> {
         .collect()
 }
 
+/// What the settings and the query make of the constraint of a resize: a corner drag keeps its proportions when the settings say so.
+pub(crate) fn effective_constraint(s: &crate::settings::Settings, c: Constraint, moving: &Edges, frame: &TurnedBox) -> Constraint {
+    let one = |a: bool, b: bool| a != b;
+    let corner = one(moving.u_min, moving.u_max) && one(moving.v_min, moving.v_max);
+    match c {
+        Constraint::None if s.corners_keep_proportions && corner && frame.size.height > 0.0 => {
+            Constraint::Aspect { ratio: frame.size.width / frame.size.height, about: About::Fixed }
+        }
+        other => other,
+    }
+}
+
 /// The sides whose points are lined up: the moving ones, and with the sides moving together, both of each axis that has one.
 fn carrying(cx: &Ctx<'_>, moving: &Edges) -> Vec<SideId> {
     let sides = flagged(moving);
@@ -140,7 +152,7 @@ fn carrying(cx: &Ctx<'_>, moving: &Edges) -> Vec<SideId> {
 }
 
 /// The degrees the constraint leaves the moving sides.
-fn degrees(cx: &Ctx<'_>, own: &Own, moving: &Edges) -> Vec<Degree> {
+fn degrees(cx: &Ctx<'_>, own: &Own, moving: &Edges, frame: &TurnedBox) -> Vec<Degree> {
     let sides = flagged(moving);
     let e = own.ext;
     let carry = |ids: &[SideId], w: &dyn Fn(SideId, Vec2) -> Vec2| -> Vec<(Vec2, Vec2, SideId, u8)> {
@@ -149,7 +161,7 @@ fn degrees(cx: &Ctx<'_>, own: &Own, moving: &Edges) -> Vec<Degree> {
             .map(|(p, id, i)| (p, w(id, p), id, i))
             .collect()
     };
-    match cx.q.constraint {
+    match effective_constraint(cx.s, cx.q.constraint, moving, frame) {
         Constraint::Centre => {
             let mut out = Vec::new();
             for (is_u, ids) in [(true, [SideId::UMin, SideId::UMax]), (false, [SideId::VMin, SideId::VMax])] {
@@ -256,6 +268,36 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
     out
 }
 
+/// The length in a sorted array nearest to `len` whose object counts under the scope of the settings. With a view, the walk goes out from the
+/// insertion point past the objects that are outside it, charged to `line_steps` and cut there.
+pub(crate) fn nearest_length(cx: &mut Ctx<'_>, arr: &[crate::index::Length], len: f64) -> Option<crate::index::Length> {
+    let i = arr.partition_point(|l| l.length < len);
+    let (below, above) = arr.split_at(i.min(arr.len()));
+    let cap = u64::from(cx.budget().line_steps);
+    let mut found: Vec<crate::index::Length> = Vec::new();
+    for side in [0, 1] {
+        let list: Box<dyn Iterator<Item = &crate::index::Length> + '_> =
+            if side == 0 { Box::new(below.iter().rev()) } else { Box::new(above.iter()) };
+        for l in list {
+            if !crate::budget::Work::charge(
+                &mut cx.work.line_steps,
+                cap,
+                1,
+                &mut cx.work.cut,
+                &mut cx.work.truncated,
+                crate::budget::Cuts::LINE_STEPS,
+            ) {
+                break;
+            }
+            if cx.in_scope(l.id) {
+                found.push(*l);
+                break;
+            }
+        }
+    }
+    found.into_iter().min_by(|a, b| (a.length - len).abs().total_cmp(&(b.length - len).abs()).then(a.id.cmp(&b.id)))
+}
+
 /// The size candidates of a degree: other objects' own widths and heights, by bisection within the reach.
 fn size_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree) -> Vec<Cand> {
     let rule = cx.rule(Kind::Size);
@@ -286,13 +328,7 @@ fn size_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree) -> Vec<Cand> {
         };
         for arr in arrays {
             cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(crate::index::log_steps(arr.len()));
-            let i = arr.partition_point(|l| l.length < len);
-            let near = [i.checked_sub(1), Some(i)]
-                .into_iter()
-                .flatten()
-                .filter_map(|j| arr.get(j))
-                .min_by(|a, b| (a.length - len).abs().total_cmp(&(b.length - len).abs()).then(a.id.cmp(&b.id)));
-            let Some(m) = near else { continue };
+            let Some(m) = nearest_length(cx, arr, len) else { continue };
             let g = (m.length - len) / rate;
             let travel = g.abs() * per_g;
             if !(g.is_finite() && cx.pulls(Kind::Size, travel) && deg.kind.valid(own.ext, g)) {
@@ -361,7 +397,7 @@ pub(crate) fn solve_edges(cx: &mut Ctx<'_>, _detail: &mut dyn Detail, frame: Tur
     cx.region = cx.t.rel_bounds(&frame);
     let own = Own::of(&frame, cx.o);
     let dirs = directions(cx, &frame);
-    let degs = degrees(cx, &own, &moving);
+    let degs = degrees(cx, &own, &moving, &frame);
     let keep = if matches!(cx.q.rounding, Rounding::None) { 1 } else { 8 };
     let mut lists: Vec<Vec<Cand>> = Vec::new();
     for deg in &degs {

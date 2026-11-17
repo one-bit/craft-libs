@@ -13,7 +13,7 @@ use std::f64::consts::PI;
 
 use kurbo::{Point, Rect, Vec2};
 
-use crate::frame::{Coincide, Id, fold, unit};
+use crate::frame::{Coincide, Id, Side, fold, unit};
 use crate::kind::Kind;
 
 /// The bits of the bisection that finds a place among `n` entries: the steps a search of `n` costs.
@@ -37,6 +37,8 @@ pub(crate) struct RawLine {
     pub hi: f64,
     pub kind: Kind,
     pub id: Option<Id>,
+    /// Which side of its box the line is, when it is a side of one.
+    pub side: Option<Side>,
 }
 
 /// The lines of one kind at one place in one direction.
@@ -54,6 +56,7 @@ pub(crate) struct Entry {
 #[derive(Clone, Debug)]
 pub(crate) struct Set {
     pub kind: Kind,
+    pub side: Option<Side>,
     pub entries: Vec<Entry>,
 }
 
@@ -119,6 +122,7 @@ fn raw_order(a: &RawLine, b: &RawLine) -> std::cmp::Ordering {
     a.angle
         .total_cmp(&b.angle)
         .then(a.kind.cmp(&b.kind))
+        .then(a.side.cmp(&b.side))
         .then(a.offset.total_cmp(&b.offset))
         .then(a.id.cmp(&b.id))
         .then(a.lo.total_cmp(&b.lo))
@@ -128,6 +132,7 @@ fn raw_order(a: &RawLine, b: &RawLine) -> std::cmp::Ordering {
 fn within_group_order(a: &RawLine, b: &RawLine) -> std::cmp::Ordering {
     a.kind
         .cmp(&b.kind)
+        .then(a.side.cmp(&b.side))
         .then(a.offset.total_cmp(&b.offset))
         .then(a.id.cmp(&b.id))
         .then(a.lo.total_cmp(&b.lo))
@@ -200,8 +205,8 @@ impl DirTable {
 fn group_sets(group: &[RawLine], co: &Coincide) -> Vec<Set> {
     let mut sets: Vec<Set> = Vec::new();
     for line in group {
-        if sets.last().is_none_or(|s| s.kind != line.kind) {
-            sets.push(Set { kind: line.kind, entries: Vec::new() });
+        if sets.last().is_none_or(|s| s.kind != line.kind || s.side != line.side) {
+            sets.push(Set { kind: line.kind, side: line.side, entries: Vec::new() });
         }
         let Some(set) = sets.last_mut() else { continue };
         match set.entries.last_mut() {
@@ -419,7 +424,7 @@ mod tests {
     }
 
     fn raw(angle: f64, offset: f64, kind: Kind, id: u64) -> RawLine {
-        RawLine { angle, offset, lo: -1.0, hi: 1.0, kind, id: Some(Id(id)) }
+        RawLine { angle, offset, lo: -1.0, hi: 1.0, kind, id: Some(Id(id)), side: None }
     }
 
     #[test]
@@ -596,7 +601,7 @@ mod tests {
             let want = offsets.iter().copied().min_by(|a, b| (a - q).abs().total_cmp(&(b - q).abs())).unwrap();
             assert_eq!((got - q).abs(), (want - q).abs(), "{q}");
         }
-        assert!(Set { kind: Kind::Edge, entries: vec![] }.nearest(1.0).is_none());
+        assert!(Set { kind: Kind::Edge, side: None, entries: vec![] }.nearest(1.0).is_none());
         assert_eq!(log_steps(0), 0);
         assert_eq!(log_steps(1), 1);
         assert_eq!(log_steps(1_200_000), 21);
@@ -606,9 +611,9 @@ mod tests {
     fn equal_places_group_with_the_union_of_spans_and_the_lowest_id() {
         let co = Coincide::default();
         let mut lines: Vec<RawLine> = (0..100u64)
-            .map(|i| RawLine { angle: 0.0, offset: 4.0, lo: i as f64, hi: i as f64 + 1.0, kind: Kind::Edge, id: Some(Id(100 - i)) })
+            .map(|i| RawLine { angle: 0.0, offset: 4.0, lo: i as f64, hi: i as f64 + 1.0, kind: Kind::Edge, id: Some(Id(100 - i)), side: None })
             .collect();
-        lines.push(RawLine { angle: 0.0, offset: 4.0 + 1e-3, lo: 0.0, hi: 1.0, kind: Kind::Edge, id: None });
+        lines.push(RawLine { angle: 0.0, offset: 4.0 + 1e-3, lo: 0.0, hi: 1.0, kind: Kind::Edge, id: None, side: None });
         let t = DirTable::build(lines.clone(), &co);
         let set = t.dirs.first().unwrap().set(Kind::Edge).unwrap();
         assert_eq!(set.entries.len(), 2);

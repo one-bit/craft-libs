@@ -8,7 +8,7 @@ use crate::common::*;
 fn turned_scene(angles: &[f64]) -> craft_snap::Targets {
     let mut b = TargetsBuilder::new(Limits::default());
     for (i, a) in angles.iter().enumerate() {
-        b.object(Id(i as u64), Object { frame: frame(i as f64 * 20.0, 0.0, 5.0, 5.0, *a), angle: None, parts: Parts::ALL }).unwrap();
+        b.object(Id(i as u64), Object { frame: frame(i as f64 * 20.0, 0.0, 5.0, 5.0, *a), bounds: None, angle: None, parts: Parts::ALL }).unwrap();
     }
     b.build()
 }
@@ -149,7 +149,7 @@ mod hostile {
 
     fn scene_at(angle: f64) -> craft_snap::Targets {
         let mut b = TargetsBuilder::new(Limits::default());
-        b.object(Id(1), Object { frame: frame(0.0, 0.0, 5.0, 5.0, angle), angle: None, parts: Parts::ALL }).unwrap();
+        b.object(Id(1), Object { frame: frame(0.0, 0.0, 5.0, 5.0, angle), bounds: None, angle: None, parts: Parts::ALL }).unwrap();
         b.build()
     }
 

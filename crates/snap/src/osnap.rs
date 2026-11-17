@@ -98,6 +98,17 @@ fn accuracy(size: f64) -> f64 {
     (size * 1.0e-9).max(1.0e-300)
 }
 
+/// The box round an outline, curves read exactly: the app gives it as `Object::bounds` or `Query::bounds`. At most [`MAX_SEGMENTS`] segments are
+/// read; a path with nothing in it, or a box that is not finite, gives `None`.
+pub fn path_bounds(path: &BezPath) -> Option<Rect> {
+    use kurbo::Shape;
+    let l = local(path);
+    let b = l.path.bounding_box();
+    let r = Rect::new(b.x0 + l.centre.x, b.y0 + l.centre.y, b.x1 + l.centre.x, b.y1 + l.centre.y);
+    let finite = l.path.elements().iter().flat_map(el_points).all(|p| p.is_finite());
+    (finite && !l.path.elements().is_empty() && [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite())).then_some(r)
+}
+
 /// The start and the end of every segment, a point once where one segment ends and the next begins.
 pub fn endpoints(path: &BezPath) -> Vec<Point> {
     let l = local(path);
@@ -565,6 +576,19 @@ mod tests {
         assert!(found.cut, "{found:?}");
         assert!(found.charged <= MAX_FLATTEN_PIECES && found.made <= found.charged, "{found:?}");
         assert!(found.charged > MAX_FLATTEN_PIECES - 2 * estimated_pieces(400.0 * std::f64::consts::SQRT_2, F), "{found:?}");
+    }
+
+    #[test]
+    fn the_box_round_an_outline_reads_curves_exactly_and_far_paths_alike() {
+        let r = path_bounds(&circle(3.0, 4.0, 2.0)).unwrap();
+        assert!((r.x0 - 1.0).abs() < 1e-6 && (r.x1 - 5.0).abs() < 1e-6 && (r.y0 - 2.0).abs() < 1e-6 && (r.y1 - 6.0).abs() < 1e-6, "{r:?}");
+        let far = path_bounds(&circle(1.0e11 + 3.0, 4.0, 2.0)).unwrap();
+        assert!((far.width() - 4.0).abs() < 1e-3 && (far.x0 - (1.0e11 + 1.0)).abs() < 1e-3, "{far:?}");
+        assert!(path_bounds(&BezPath::new()).is_none());
+        let mut nan = BezPath::new();
+        nan.move_to((f64::NAN, 0.0));
+        nan.line_to((1.0, 1.0));
+        assert!(path_bounds(&nan).is_none());
     }
 
     #[test]

@@ -17,8 +17,8 @@ use crate::ctx::{Cand, Ctx, Probe, ProbeSide, probes, top};
 use crate::frame::{Anchors, OwnOrBounds, Side, TurnedBox, to_page_axes};
 use crate::kind::Kind;
 use crate::places::{PlaceCand, box_places, solve_places};
-use crate::query::{Constraint, Detail, Rounding};
-use crate::settings::{Choose, Places};
+use crate::query::{Constraint, Detail, Rounding, Subject};
+use crate::settings::{BoxRound, Choose, Places};
 use crate::solve::{HitRec, RoundOn, Solution, round_k};
 use crate::targets::side_lines;
 
@@ -176,6 +176,19 @@ fn choose(
     }
 }
 
+/// The box round the subject's outline, moved with the subject, when the settings use outlines and the app gave one.
+fn subject_bounds(cx: &Ctx<'_>, frame: &TurnedBox) -> Option<kurbo::Rect> {
+    if cx.s.box_round != BoxRound::Paths {
+        return None;
+    }
+    let b = cx.q.bounds?;
+    let from = match cx.q.subject {
+        Subject::Box { frame, .. } | Subject::Nudge { frame, .. } => frame.centre,
+        _ => return None,
+    };
+    Some(b + (frame.centre - from))
+}
+
 /// The probes of a box: the sides of the box round it in the page's directions, and its own sides when it is turned.
 pub(crate) fn box_probes(cx: &Ctx<'_>, frame: &TurnedBox, u: Anchors, v: Anchors) -> Vec<Probe> {
     let co = &cx.co;
@@ -184,7 +197,7 @@ pub(crate) fn box_probes(cx: &Ctx<'_>, frame: &TurnedBox, u: Anchors, v: Anchors
         None => (*frame, u, v, true),
     };
     let (page, own) = (cx.s.frames.page, cx.s.frames.own && turned);
-    let lines = side_lines(&sq, cx.o, co, own);
+    let lines = side_lines(&sq, subject_bounds(cx, frame), cx.o, co, own);
     probes(&lines, co, &|l| match l.own {
         OwnOrBounds::Bounds => page && if l.angle == 0.0 { xf.has(l.side) } else { yf.has(l.side) },
         OwnOrBounds::Own => own && if l.angle == sq.angle { u.has(l.side) } else { v.has(l.side) },

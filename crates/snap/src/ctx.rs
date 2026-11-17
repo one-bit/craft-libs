@@ -27,6 +27,8 @@ pub(crate) struct Ctx<'a> {
     pub region: Rect,
     /// The places weighed, kept for the marks.
     pub gathered: Vec<crate::places::Gathered>,
+    /// The boxes round the outlines of the objects near, asked of the detail source when the settings say `Paths`: object index and box.
+    pub path_bounds: Vec<(u32, Rect)>,
 }
 
 impl<'a> Ctx<'a> {
@@ -42,6 +44,7 @@ impl<'a> Ctx<'a> {
             near: None,
             region: Rect::ZERO,
             gathered: Vec::new(),
+            path_bounds: Vec::new(),
         }
     }
 
@@ -63,6 +66,26 @@ impl<'a> Ctx<'a> {
     pub fn pulls(&self, kind: Kind, d: f64) -> bool {
         let r = self.rule(kind);
         r.on && r.reach.within(d, self.zoom)
+    }
+
+    /// The box round the outline of object `idx`, when there is one: the detail source's, else the app's.
+    pub fn bounds_of(&self, idx: u32) -> Option<Rect> {
+        self.path_bounds
+            .binary_search_by_key(&idx, |p| p.0)
+            .ok()
+            .and_then(|i| self.path_bounds.get(i))
+            .map(|p| p.1)
+            .or_else(|| self.t.objects.get(idx as usize).and_then(|o| o.bounds))
+    }
+
+    /// Whether the objects with this id count for a size match under the scope of the settings.
+    pub fn in_scope(&self, id: Id) -> bool {
+        let crate::settings::SizeScope::View(view) = self.s.size_scope else { return true };
+        let i = self.t.objects.partition_point(|o| o.id < id);
+        self.t.objects.iter().skip(i).take_while(|o| o.id == id).any(|o| {
+            let b = o.bounds.unwrap_or_else(|| o.frame.bounds());
+            b.x0 <= view.x1 && view.x0 <= b.x1 && b.y0 <= view.y1 && view.y0 <= b.y1
+        })
     }
 
     /// A point relative to the origin.

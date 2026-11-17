@@ -94,8 +94,11 @@ impl Parts {
 /// An object given to the builder.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Object {
-    /// Its box, turned or not. The box round it (its bounds) is worked out from this.
+    /// Its box, turned or not. The box round it (its bounds) is worked out from this, unless `bounds` says otherwise.
     pub frame: TurnedBox,
+    /// The box round its outline, when the app has it and it differs from the box round the frame's corners: used for the page's directions
+    /// (its own sides are still the frame's). See [`crate::osnap::path_bounds`].
+    pub bounds: Option<Rect>,
     /// Its angle for rotation match, when it differs from the frame's (a line's direction, a flipped shape's own turn).
     pub angle: Option<f64>,
     /// What it offers.
@@ -123,6 +126,7 @@ pub struct BuildReport {
 pub(crate) struct ObjectEntry {
     pub id: Id,
     pub frame: TurnedBox,
+    pub bounds: Option<Rect>,
     pub angle: Option<f64>,
     pub parts: Parts,
 }
@@ -153,13 +157,15 @@ pub(crate) fn side_kind(side: Side) -> Kind {
 
 /// The lines of a box, relative to `origin`: the sides of the box round it, in the page's directions, and, when it is turned and `own` is
 /// asked for, its own sides. A box a whole number of quarter turns from the page has the page's lines only, once.
-pub(crate) fn side_lines(frame: &TurnedBox, origin: Point, co: &Coincide, own: bool) -> Vec<SideLine> {
+pub(crate) fn side_lines(frame: &TurnedBox, bounds: Option<Rect>, origin: Point, co: &Coincide, own: bool) -> Vec<SideLine> {
     let c = frame.centre - origin.to_vec2();
     let rel = TurnedBox { centre: c, ..*frame };
     let (page, turned) = match frame.quarter(co.angle) {
         Some(q) => (TurnedBox { centre: c, ..frame.squared(q) }.bounds(), false),
         None => (rel.bounds(), true),
     };
+    // The box round the outline, when the app has it, stands for the box round the corners.
+    let page = bounds.map_or(page, |b| Rect::new(b.x0 - origin.x, b.y0 - origin.y, b.x1 - origin.x, b.y1 - origin.y));
     let mut out = Vec::with_capacity(12);
     let sides = |lo: f64, hi: f64| [(Side::Min, lo), (Side::Mid, 0.5 * (lo + hi)), (Side::Max, hi)];
     for (side, x) in sides(page.x0, page.x1) {
@@ -184,9 +190,9 @@ fn raw_of(l: &SideLine, kind: Kind, id: Option<Id>, co: &Coincide) -> RawLine {
     let (angle, flipped) = canon(l.angle, co.angle);
     // A flipped normal reads the same line with its offset changed in sign and its tangent turned round.
     if flipped {
-        RawLine { angle, offset: -l.offset, lo: -l.hi, hi: -l.lo, kind, id }
+        RawLine { angle, offset: -l.offset, lo: -l.hi, hi: -l.lo, kind, id, side: Some(l.side) }
     } else {
-        RawLine { angle, offset: l.offset, lo: l.lo, hi: l.hi, kind, id }
+        RawLine { angle, offset: l.offset, lo: l.lo, hi: l.hi, kind, id, side: Some(l.side) }
     }
 }
 
@@ -238,7 +244,8 @@ impl TargetsBuilder {
         if self.report.objects >= self.limits.objects {
             return self.refuse(Refused::OverLimit);
         }
-        let entry = ObjectEntry { id, frame: object.frame, angle: object.angle, parts: object.parts };
+        let bounds = object.bounds.filter(|b| b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite());
+        let entry = ObjectEntry { id, frame: object.frame, bounds, angle: object.angle, parts: object.parts };
         if push_checked(&mut self.objects, entry).is_err() {
             return self.refuse(Refused::OverLimit);
         }
@@ -264,7 +271,7 @@ impl TargetsBuilder {
         }
         // No span is an empty extent (`lo > hi`), which joins with any other; a span given the wrong way round is turned.
         let (lo, hi) = if span.is_some() { (lo.min(hi), lo.max(hi)) } else { (lo, hi) };
-        self.add_line(RawLine { angle: direction.angle(), offset, lo, hi, kind, id })
+        self.add_line(RawLine { angle: direction.angle(), offset, lo, hi, kind, id, side: None })
     }
 
     fn add_line(&mut self, line: RawLine) -> Result<(), Refused> {
@@ -294,7 +301,7 @@ impl TargetsBuilder {
             return self.refuse(if kind.is_line() { Refused::NotARectangle } else { Refused::NotALine });
         }
         let co = self.limits.coincide;
-        let mut lines = side_lines(&frame, Point::ORIGIN, &co, true);
+        let mut lines = side_lines(&frame, None, Point::ORIGIN, &co, true);
         // For a turned frame the lines are its own: the page's lines of its bounds are not a frame's.
         if frame.quarter(co.angle).is_none() {
             lines.retain(|l| l.own == OwnOrBounds::Own);
@@ -387,6 +394,11 @@ fn object_order(a: &ObjectEntry, b: &ObjectEntry) -> std::cmp::Ordering {
         .then(fa.size.height.total_cmp(&fb.size.height))
         .then(fa.angle.total_cmp(&fb.angle))
         .then(a.angle.map(f64::to_bits).cmp(&b.angle.map(f64::to_bits)))
+        .then(
+            a.bounds
+                .map(|r| [r.x0.to_bits(), r.y0.to_bits(), r.x1.to_bits(), r.y1.to_bits()])
+                .cmp(&b.bounds.map(|r| [r.x0.to_bits(), r.y0.to_bits(), r.x1.to_bits(), r.y1.to_bits()])),
+        )
         .then(a.parts.bits().cmp(&b.parts.bits()))
 }
 
@@ -462,7 +474,7 @@ impl Targets {
                 if !(o.parts.bounds_lines || o.parts.own_lines) {
                     continue;
                 }
-                for l in side_lines(&o.frame, self.origin, &self.co, o.parts.own_lines) {
+                for l in side_lines(&o.frame, o.bounds, self.origin, &self.co, o.parts.own_lines) {
                     let wanted = if l.own == OwnOrBounds::Own { o.parts.own_lines } else { o.parts.bounds_lines || o.parts.own_lines };
                     if wanted && raw.try_reserve(1).is_ok() {
                         raw.push(raw_of(&l, side_kind(l.side), Some(o.id), &self.co));
@@ -486,7 +498,7 @@ impl Targets {
                 .objects
                 .iter()
                 .enumerate()
-                .filter_map(|(i, o)| Some(Cell { bounds: self.rel_bounds(&o.frame), id: o.id, index: u32::try_from(i).ok()? }));
+                .filter_map(|(i, o)| Some(Cell { bounds: self.entry_bounds(o), id: o.id, index: u32::try_from(i).ok()? }));
             Grid::build(cells.collect())
         });
         if did {
@@ -511,6 +523,14 @@ impl Targets {
             made.0 |= Made::POINTS;
         }
         g
+    }
+
+    /// The bounds of an object, relative to the origin: round its outline when the app gave that, else round its corners.
+    pub(crate) fn entry_bounds(&self, o: &ObjectEntry) -> Rect {
+        match o.bounds {
+            Some(b) => Rect::new(b.x0 - self.origin.x, b.y0 - self.origin.y, b.x1 - self.origin.x, b.y1 - self.origin.y),
+            None => self.rel_bounds(&o.frame),
+        }
     }
 
     /// The bounds of a box, relative to the origin.
@@ -580,7 +600,7 @@ mod tests {
     use super::*;
 
     fn obj(x: f64, y: f64, w: f64, h: f64, a: f64) -> Object {
-        Object { frame: TurnedBox { centre: Point::new(x, y), size: Size::new(w, h), angle: a }, angle: None, parts: Parts::ALL }
+        Object { frame: TurnedBox { centre: Point::new(x, y), size: Size::new(w, h), angle: a }, bounds: None, angle: None, parts: Parts::ALL }
     }
 
     fn targets(items: &[(u64, Object)]) -> Targets {
@@ -594,24 +614,25 @@ mod tests {
     #[test]
     fn an_unturned_box_has_six_lines_and_a_turned_one_twelve() {
         let co = Coincide::default();
-        let plain = side_lines(&TurnedBox::square(Point::new(5.0, 7.0), Size::new(4.0, 2.0)), Point::ORIGIN, &co, true);
+        let plain = side_lines(&TurnedBox::square(Point::new(5.0, 7.0), Size::new(4.0, 2.0)), None, Point::ORIGIN, &co, true);
         assert_eq!(plain.len(), 6);
         let x: Vec<f64> = plain.iter().filter(|l| l.angle == 0.0).map(|l| l.offset).collect();
         assert_eq!(x, [3.0, 5.0, 7.0]);
-        let quarter = side_lines(&TurnedBox { centre: Point::new(5.0, 7.0), size: Size::new(4.0, 2.0), angle: FRAC_PI_2 }, Point::ORIGIN, &co, true);
+        let quarter =
+            side_lines(&TurnedBox { centre: Point::new(5.0, 7.0), size: Size::new(4.0, 2.0), angle: FRAC_PI_2 }, None, Point::ORIGIN, &co, true);
         assert_eq!(quarter.len(), 6, "a quarter turn has the page's lines once");
         let xq: Vec<f64> = quarter.iter().filter(|l| l.angle == 0.0).map(|l| l.offset).collect();
         assert_eq!(xq, [4.0, 5.0, 6.0]);
-        let turned = side_lines(&TurnedBox { centre: Point::new(5.0, 7.0), size: Size::new(4.0, 2.0), angle: 0.5 }, Point::ORIGIN, &co, true);
+        let turned = side_lines(&TurnedBox { centre: Point::new(5.0, 7.0), size: Size::new(4.0, 2.0), angle: 0.5 }, None, Point::ORIGIN, &co, true);
         assert_eq!(turned.len(), 12);
-        assert_eq!(side_lines(&TurnedBox { centre: Point::ORIGIN, size: Size::new(1.0, 1.0), angle: 0.5 }, Point::ORIGIN, &co, false).len(), 6);
+        assert_eq!(side_lines(&TurnedBox { centre: Point::ORIGIN, size: Size::new(1.0, 1.0), angle: 0.5 }, None, Point::ORIGIN, &co, false).len(), 6);
     }
 
     #[test]
     fn the_sides_of_a_turned_box_lie_on_its_edges() {
         let co = Coincide::default();
         let f = TurnedBox { centre: Point::new(3.0, -2.0), size: Size::new(6.0, 2.0), angle: 0.7 };
-        let lines = side_lines(&f, Point::ORIGIN, &co, true);
+        let lines = side_lines(&f, None, Point::ORIGIN, &co, true);
         for l in lines.iter().filter(|l| l.own == OwnOrBounds::Own && l.side != Side::Mid) {
             let n = unit(l.angle);
             let t = kurbo::Vec2::new(-n.y, n.x);

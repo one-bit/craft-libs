@@ -23,6 +23,8 @@ pub(crate) struct Found {
     pub id: Option<Id>,
     pub c: f64,
     pub count: u32,
+    /// Which side of its box the line is, when it is one.
+    pub side: Option<Side>,
     /// The extent along the line (empty, `lo > hi`, for a line that runs on for ever).
     pub lo: f64,
     pub hi: f64,
@@ -35,11 +37,12 @@ pub(crate) enum Free {
     Along(Vec2),
 }
 
-/// Whether the side `side` may meet a line of kind `kind` under the matching rule.
-fn matches(cx: &Ctx<'_>, kind: Kind, side: Side) -> bool {
+/// Whether the side `side` may meet a line of kind `kind` that is the side `target` of its box (or none) under the matching rule.
+fn matches(cx: &Ctx<'_>, kind: Kind, side: Side, target: Option<Side>) -> bool {
     match cx.s.matching {
         Matching::AnyToAny => true,
         Matching::LikeToLike => !kind.has_side() || ((kind == Kind::Edge) == (side != Side::Mid)),
+        Matching::SameSide => !kind.has_side() || target.is_none_or(|t| t == side),
     }
 }
 
@@ -63,11 +66,11 @@ fn from_table(cx: &mut Ctx<'_>, table: &DirTable, angle: f64, s: f64, side: Side
     cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(table.dirs.len()));
     let Some(dir) = table.find(angle, &cx.co) else { return };
     for set in &dir.sets {
-        if !cx.rule(set.kind).on || !matches(cx, set.kind, side) {
+        if !cx.rule(set.kind).on || !matches(cx, set.kind, side, set.side) {
             continue;
         }
         cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(set.entries.len()));
-        let found = |e: &Entry| Found { kind: set.kind, id: e.id, c: e.offset, count: e.count, lo: e.lo, hi: e.hi };
+        let found = |e: &Entry| Found { kind: set.kind, id: e.id, c: e.offset, count: e.count, side: set.side, lo: e.lo, hi: e.hi };
         if on {
             let list = entries_on(cx, &set.entries, s);
             out.extend(list.into_iter().map(found));
@@ -86,7 +89,7 @@ fn from_lattices(cx: &Ctx<'_>, angle: f64, s: f64, side: Side, on: bool, out: &m
     }
     for lat in cx.q.lattices {
         let (origin, pitch, o) = if axis_x { (lat.origin.x, lat.pitch.x, cx.o.x) } else { (lat.origin.y, lat.pitch.y, cx.o.y) };
-        if !(pitch.is_finite() && pitch > 0.0 && origin.is_finite() && cx.rule(lat.kind).on && matches(cx, lat.kind, side)) {
+        if !(pitch.is_finite() && pitch > 0.0 && origin.is_finite() && cx.rule(lat.kind).on && matches(cx, lat.kind, side, None)) {
             continue;
         }
         let n = ((o + s - origin) / pitch).round();
@@ -95,7 +98,7 @@ fn from_lattices(cx: &Ctx<'_>, angle: f64, s: f64, side: Side, on: bool, out: &m
         }
         let c = origin + n * pitch - o;
         if !on || cx.co.same(c, s) {
-            out.push(Found { kind: lat.kind, id: None, c, count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
+            out.push(Found { kind: lat.kind, id: None, c, count: 1, side: None, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
         }
     }
 }
@@ -130,15 +133,15 @@ fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Sid
         if !(obj.parts.bounds_lines || obj.parts.own_lines) {
             continue;
         }
-        for l in side_lines(&obj.frame, o, &co, obj.parts.own_lines) {
+        for l in side_lines(&obj.frame, cx.bounds_of(o_idx), o, &co, obj.parts.own_lines) {
             let (a, flipped) = canon(l.angle, co.angle);
             let x = (a - angle).rem_euclid(PI);
             let kind = side_kind(l.side);
-            if x.min(PI - x) > co.angle || !cx.rule(kind).on || !matches(cx, kind, side) {
+            if x.min(PI - x) > co.angle || !cx.rule(kind).on || !matches(cx, kind, side, Some(l.side)) {
                 continue;
             }
             let (c, lo, hi) = if flipped { (-l.offset, -l.hi, -l.lo) } else { (l.offset, l.lo, l.hi) };
-            let found = Found { kind, id: Some(obj.id), c, count: 1, lo, hi };
+            let found = Found { kind, id: Some(obj.id), c, count: 1, side: Some(l.side), lo, hi };
             if on {
                 if co.same(c, s) {
                     best.push(found);
@@ -192,7 +195,7 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
     // Lattices: the next line past the one the side is on.
     for lat in cx.q.lattices {
         let (axis_x, axis_y) = (angle.abs() <= cx.co.angle, (angle - FRAC_PI_2).abs() <= cx.co.angle);
-        if !(axis_x || axis_y) || !cx.rule(lat.kind).on || !matches(cx, lat.kind, side) {
+        if !(axis_x || axis_y) || !cx.rule(lat.kind).on || !matches(cx, lat.kind, side, None) {
             continue;
         }
         let (origin, pitch, o) = if axis_x { (lat.origin.x, lat.pitch.x, cx.o.x) } else { (lat.origin.y, lat.pitch.y, cx.o.y) };
@@ -204,7 +207,7 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
         let first = if up { n.floor() + 1.0 } else { n.ceil() - 1.0 };
         let k = if cx.co.same(line(first), s) { if up { first + 1.0 } else { first - 1.0 } } else { first };
         if k.is_finite() && k.abs() <= 4_503_599_627_370_496.0 {
-            out.push(Found { kind: lat.kind, id: None, c: line(k), count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
+            out.push(Found { kind: lat.kind, id: None, c: line(k), count: 1, side: None, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
         }
     }
     let t = cx.t;
@@ -215,7 +218,7 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
     for table in tables {
         cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(table.dirs.len()));
         let Some(dir) = table.find(angle, &cx.co) else { continue };
-        let sets: Vec<_> = dir.sets.iter().filter(|set| cx.rule(set.kind).on && matches(cx, set.kind, side)).collect();
+        let sets: Vec<_> = dir.sets.iter().filter(|set| cx.rule(set.kind).on && matches(cx, set.kind, side, set.side)).collect();
         for set in sets {
             cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(set.entries.len()));
             out.extend(ahead_in(cx, &set.entries, s, up).map(|e| Found {
@@ -223,6 +226,7 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
                 id: e.id,
                 c: e.offset,
                 count: e.count,
+                side: set.side,
                 lo: e.lo,
                 hi: e.hi,
             }));
@@ -299,13 +303,14 @@ mod tests {
             rounding: Rounding::None,
             lattices: &[],
             budget: Budget::default(),
+            bounds: None,
         }
     }
 
     fn built(objects: &[(u64, TurnedBox)], guides: &[f64]) -> crate::targets::Targets {
         let mut b = TargetsBuilder::new(Limits::default());
         for (id, f) in objects {
-            b.object(Id(*id), Object { frame: *f, angle: None, parts: Parts::ALL }).unwrap();
+            b.object(Id(*id), Object { frame: *f, bounds: None, angle: None, parts: Parts::ALL }).unwrap();
         }
         for g in guides {
             b.line(None, Axis::X, *g, None, Kind::Guide).unwrap();

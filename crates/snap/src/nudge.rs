@@ -11,6 +11,7 @@ use crate::align::lines_ahead;
 use crate::ctx::{Cand, Ctx};
 use crate::frame::{Anchors, Axis, TurnedBox};
 use crate::moves::box_probes;
+use crate::settings::NudgeMode;
 use crate::solve::{HitRec, Solution};
 
 /// Nudges a box by one step along a page axis, or to the first target ahead.
@@ -18,23 +19,29 @@ pub(crate) fn solve_nudge(cx: &mut Ctx<'_>, frame: TurnedBox, axis: Axis, forwar
     let e: Vec2 = axis.unit() * if forward { 1.0 } else { -1.0 };
     cx.region = cx.t.rel_bounds(&frame);
     let probes = box_probes(cx, &frame, Anchors::ALL, Anchors::ALL);
+    // How far a target may be, and how far the box goes when there is none: by mode.
+    let (limit, fallback) = match cx.s.nudge {
+        NudgeMode::Stop => (step, step),
+        NudgeMode::Next { tick } => (f64::INFINITY, tick),
+        NudgeMode::Plain => (0.0, step),
+    };
     let mut best: Option<Cand> = None;
-    for p in &probes {
+    for p in probes.iter().filter(|_| limit > 0.0) {
         let ne = p.normal.dot(e);
         if ne.abs() < 1.0e-12 {
             continue;
         }
         for ps in &p.sides {
-            for f in lines_ahead(cx, p.angle, ps.offset, ps.side, ne > 0.0, step) {
+            for f in lines_ahead(cx, p.angle, ps.offset, ps.side, ne > 0.0, if limit.is_finite() { limit } else { 0.0 }) {
                 let travel = (f.c - ps.offset) / ne;
-                if !(travel.is_finite() && travel > 0.0 && travel <= step + cx.co.tol(travel, step)) {
+                if !(travel.is_finite() && travel > 0.0 && travel <= limit + cx.co.tol(travel, limit.min(1.0e300))) {
                     continue;
                 }
                 let c = Cand {
                     kind: f.kind,
                     id: f.id,
                     prio: cx.rule(f.kind).priority,
-                    reach: step,
+                    reach: limit,
                     side: ps.side,
                     own: ps.own,
                     angle: p.angle,
@@ -56,7 +63,7 @@ pub(crate) fn solve_nudge(cx: &mut Ctx<'_>, frame: TurnedBox, axis: Axis, forwar
             }
         }
     }
-    let travel = best.map_or(step, |b| b.t);
+    let travel = best.map_or(fallback, |b| b.t);
     let mut sol = Solution::new();
     sol.k = e * travel;
     sol.frame = Some(TurnedBox { centre: frame.centre + sol.k, ..frame });

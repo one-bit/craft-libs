@@ -15,12 +15,28 @@ fn object_frame() -> impl Strategy<Value = (f64, f64, f64, f64, f64)> {
 }
 
 fn settings() -> impl Strategy<Value = Settings> {
-    (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>()).prop_map(|(ranked, like, page, own)| Settings {
-        choose: if ranked { Choose::Ranked } else { Choose::Nearest },
-        matching: if like { Matching::LikeToLike } else { Matching::AnyToAny },
-        frames: Frames { page: page || !own, own },
-        ..Settings::default()
-    })
+    (
+        any::<bool>(),
+        0u8..3,
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        prop_oneof![Just(None), (-30.0f64..0.0, -30.0f64..0.0, 0.0f64..30.0, 0.0f64..30.0).prop_map(Some)],
+    )
+        .prop_map(|(ranked, matching, page, own, keep, paths, view)| Settings {
+            choose: if ranked { Choose::Ranked } else { Choose::Nearest },
+            matching: match matching {
+                0 => Matching::AnyToAny,
+                1 => Matching::LikeToLike,
+                _ => Matching::SameSide,
+            },
+            frames: Frames { page: page || !own, own },
+            corners_keep_proportions: keep,
+            box_round: if paths { craft_snap::BoxRound::Paths } else { craft_snap::BoxRound::Corners },
+            size_scope: view.map_or(craft_snap::SizeScope::Anywhere, |(a, b, c, d)| craft_snap::SizeScope::View(kurbo::Rect::new(a, b, c, d))),
+            ..Settings::default()
+        })
 }
 
 fn constraint() -> impl Strategy<Value = Constraint> {
@@ -165,6 +181,49 @@ proptest! {
         let out = run(&t, &q);
         if let Err(b) = out.check(&t, &q) {
             prop_assert!(false, "{:?}\nresult: {:?}", b, out);
+        }
+    }
+}
+
+fn nudge_mode() -> impl Strategy<Value = craft_snap::NudgeMode> {
+    prop_oneof![
+        Just(craft_snap::NudgeMode::Stop),
+        (0.1f64..3.0).prop_map(|tick| craft_snap::NudgeMode::Next { tick }),
+        Just(craft_snap::NudgeMode::Plain)
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(800))]
+
+    /// Every nudge mode lands where it says: the first target ahead, the next place or the tick, or the step as it is.
+    #[test]
+    fn what_is_drawn_is_where_a_nudge_lands(
+        objects in prop::collection::vec(grid_frame(), 0..12),
+        gx in prop::collection::vec(-50.0f64..50.0, 0..4),
+        gy in prop::collection::vec(-30.0f64..30.0, 0..4),
+        sub in object_frame(),
+        axis_x in any::<bool>(),
+        forward in any::<bool>(),
+        step in 0.05f64..8.0,
+        mode in nudge_mode(),
+        s in settings(),
+    ) {
+        let objs: Vec<(u64, _)> = objects.iter().enumerate().map(|(i, o)| (i as u64, frame(o.0, o.1, o.2, o.3, o.4))).collect();
+        let t = scene(&objs, &gx, &gy);
+        let s = Settings { nudge: mode, ..s };
+        let f = frame(sub.0, sub.1, sub.2, sub.3, sub.4);
+        let axis = if axis_x { Axis::X } else { Axis::Y };
+        let q = query(Subject::Nudge { frame: f, axis, forward, step }, &s);
+        let out = run(&t, &q);
+        if let Err(b) = out.check(&t, &q) {
+            prop_assert!(false, "{:?}\nresult: {:?}", b, out);
+        }
+        let travel = if axis_x { out.delta.x.abs() } else { out.delta.y.abs() };
+        match mode {
+            craft_snap::NudgeMode::Plain => prop_assert!((travel - step).abs() <= 1e-12 * step.max(1.0)),
+            craft_snap::NudgeMode::Stop => prop_assert!(travel <= step * (1.0 + 1e-9)),
+            craft_snap::NudgeMode::Next { .. } => prop_assert!(travel > 0.0),
         }
     }
 }

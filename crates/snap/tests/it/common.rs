@@ -11,7 +11,7 @@ pub fn frame(x: f64, y: f64, w: f64, h: f64, angle: f64) -> TurnedBox {
 }
 
 pub fn object(frame: TurnedBox) -> Object {
-    Object { frame, angle: None, parts: Parts::ALL }
+    Object { frame, bounds: None, angle: None, parts: Parts::ALL }
 }
 
 /// A set of targets: objects with their ids, and guides at the given places on each page axis.
@@ -30,7 +30,16 @@ pub fn scene(objects: &[(u64, TurnedBox)], guides_x: &[f64], guides_y: &[f64]) -
 }
 
 pub fn query<'a>(subject: Subject<'a>, settings: &'a Settings) -> Query<'a> {
-    Query { subject, zoom: 1.0, settings, constraint: Constraint::None, rounding: Rounding::None, lattices: &[], budget: Budget::default() }
+    Query {
+        subject,
+        zoom: 1.0,
+        settings,
+        constraint: Constraint::None,
+        rounding: Rounding::None,
+        lattices: &[],
+        budget: Budget::default(),
+        bounds: None,
+    }
 }
 
 pub fn run(t: &Targets, q: &Query<'_>) -> Snapped {

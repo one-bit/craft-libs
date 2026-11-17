@@ -31,6 +31,8 @@ pub use frame::{Anchors, Axis, Coincide, Direction, Id, OwnOrBounds, Side, Turne
 pub use kind::{Kind, KindRule, KindTable, Reach};
 pub use query::{About, Constraint, Detail, Edges, Lattice, NoDetail, Query, Rounding, Subject};
 pub use result::{Broken, Hit, Mark, Snapped};
-pub use settings::{Choose, Frames, MarkRule, Matching, Places, Settings, SizeAxes, SpacingGaps, SpacingReach, SpacingRow};
+pub use settings::{
+    BoxRound, Choose, Frames, MarkRule, Matching, NudgeMode, Places, Settings, SizeAxes, SizeScope, SpacingGaps, SpacingReach, SpacingRow,
+};
 pub use solve::snap;
 pub use targets::{BuildReport, Limits, Object, Parts, Refused, Targets, TargetsBuilder};

@@ -25,6 +25,24 @@ pub const MAX_SPOTS: usize = 96;
 /// The most boxes to avoid that are read.
 pub const MAX_AVOID: usize = 64;
 
+/// How many decimal places a value is shown with by default.
+pub const DEFAULT_PLACES: u8 = 3;
+
+/// The most decimal places [`format`] writes.
+pub const MAX_PLACES: u8 = 12;
+
+/// A length as a label shows it: `places` decimal places (at most [`MAX_PLACES`]), none trimmed, so that a column of labels lines up. A value
+/// that is not a finite number gives an empty label; a negative zero is written as zero. The app converts to its own unit first.
+pub fn format(value: f64, places: u8) -> String {
+    if !value.is_finite() {
+        return String::new();
+    }
+    let places = usize::from(places.min(MAX_PLACES));
+    let s = std::format!("{value:.places$}");
+    // A value that rounds to nothing has no sign.
+    if s.starts_with('-') && s.chars().all(|c| matches!(c, '-' | '0' | '.')) { s.trim_start_matches('-').to_string() } else { s }
+}
+
 /// A line to label: its two ends and the size of its label.
 pub type Labelled = (Point, Point, Size);
 
@@ -102,6 +120,19 @@ mod tests {
 
     fn no_overlaps(r: &[Rect]) -> bool {
         r.iter().enumerate().all(|(i, a)| r.iter().skip(i + 1).all(|b| !overlaps(a, b)))
+    }
+
+    #[test]
+    fn values_are_shown_to_three_places_by_default_and_never_hostile() {
+        assert_eq!(format(1.25, DEFAULT_PLACES), "1.250");
+        assert_eq!(format(2.0, 0), "2");
+        assert_eq!(format(-0.0004, 3), "0.000");
+        assert_eq!(format(-1.5, 1), "-1.5");
+        assert_eq!(format(f64::NAN, 3), "");
+        assert_eq!(format(f64::INFINITY, 3), "");
+        assert_eq!(format(0.5, 200).len(), 2 + usize::from(MAX_PLACES));
+        assert_eq!(crate::Settings::default().label_places, 3);
+        assert_eq!(format(1.0e300, 3).len(), 301 + 4);
     }
 
     #[test]

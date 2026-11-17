@@ -24,11 +24,23 @@ fn same_direction(a: f64, b: f64, co: &Coincide) -> bool {
     x.min(PI - x) <= co.angle
 }
 
+/// The box round the subject's outline at its final place, when the settings use it.
+fn final_bounds(q: &Query<'_>, f: &crate::frame::TurnedBox) -> Option<kurbo::Rect> {
+    if q.settings.box_round != crate::settings::BoxRound::Paths {
+        return None;
+    }
+    let from = match q.subject {
+        Subject::Box { frame, .. } | Subject::Nudge { frame, .. } => frame.centre,
+        _ => return None,
+    };
+    q.bounds.map(|b| b + (f.centre - from))
+}
+
 /// The sides of the final geometry, in the canonical form of a line: the canonical angle, the offset and the extent.
 fn final_sides(t: &Targets, snapped: &Snapped, q: &Query<'_>) -> Vec<SideLine> {
     let co = &q.settings.coincide;
     if let Some(f) = snapped.frame {
-        return side_lines(&f, t.origin, co, true);
+        return side_lines(&f, final_bounds(q, &f), t.origin, co, true);
     }
     match snapped.point {
         Some(p) => {
@@ -70,7 +82,7 @@ fn target_line(t: &Targets, q: &Query<'_>, kind: Kind, angle: f64, c: f64) -> bo
     }
     let from_object = t.objects.iter().any(|o| {
         (o.parts.bounds_lines || o.parts.own_lines)
-            && side_lines(&o.frame, t.origin, co, o.parts.own_lines).iter().any(|l| {
+            && side_lines(&o.frame, o.bounds, t.origin, co, o.parts.own_lines).iter().any(|l| {
                 let (a, flipped) = canon(l.angle, co.angle);
                 side_kind(l.side) == kind && same_direction(a, angle, co) && co.same(if flipped { -l.offset } else { l.offset }, c)
             })
@@ -95,7 +107,7 @@ fn lattice_line(t: &Targets, q: &Query<'_>, kind: Kind, angle: f64, c: f64) -> b
 
 /// A line mark: a side of the final geometry is on it, its segment covers that side, and a line of each kind it names is in the targets.
 fn line_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
-    let Mark::Line { direction, offset, segment, kinds, .. } = m else { return Ok(()) };
+    let Mark::Line { direction, offset, segment, kinds, first, .. } = m else { return Ok(()) };
     let co = &q.settings.coincide;
     let (ac, _) = canon(direction.angle(), co.angle);
     let (n, tn) = (unit(ac), Vec2::new(-unit(ac).y, unit(ac).x));
@@ -127,8 +139,11 @@ fn line_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<
     if !(on || through_point) {
         return broken("no side of the final geometry is on a line mark, or its segment does not cover it", m);
     }
+    // The box a detail source gives round an object's outline is not in the set: the check cannot read it, so it takes the object's word.
+    let from_detail =
+        q.settings.box_round == crate::settings::BoxRound::Paths && first.is_some_and(|id| t.objects.iter().any(|o| o.id == id && o.parts.detail));
     for k in kinds {
-        if !target_line(t, q, *k, ac, c) {
+        if !from_detail && !target_line(t, q, *k, ac, c) {
             return broken("a line mark names a target that is not in the set", m);
         }
     }
@@ -323,8 +338,17 @@ fn size_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<
         return broken("a size mark's side is not a side of the final box", m);
     }
     if let Some((id, line)) = matched {
-        let found =
-            t.objects.iter().any(|o| o.id == *id && o.parts.size && (co.same(o.frame.size.width, *value) || co.same(o.frame.size.height, *value)));
+        let in_view = |o: &crate::targets::ObjectEntry| match q.settings.size_scope {
+            crate::settings::SizeScope::Anywhere => true,
+            crate::settings::SizeScope::View(v) => {
+                let b = o.bounds.unwrap_or_else(|| o.frame.bounds());
+                b.x0 <= v.x1 && v.x0 <= b.x1 && b.y0 <= v.y1 && v.y0 <= b.y1
+            }
+        };
+        let found = t
+            .objects
+            .iter()
+            .any(|o| o.id == *id && o.parts.size && in_view(o) && (co.same(o.frame.size.width, *value) || co.same(o.frame.size.height, *value)));
         if !found || !co.same((line.p1 - line.p0).hypot(), *value) {
             return broken("a size mark names an object that has no side of that length", m);
         }
@@ -347,7 +371,7 @@ fn resized(snapped: &Snapped, q: &Query<'_>, t: &Targets) -> Result<(), Broken> 
         return broken("a resize collapsed or flipped the box", f);
     }
     let flags = [moving.u_min, moving.u_max, moving.v_min, moving.v_max];
-    match q.constraint {
+    match crate::resize::effective_constraint(q.settings, q.constraint, &moving, &frame) {
         Constraint::Centre => {
             if !co.same_point(frame.centre, f.centre) {
                 return broken("a resize about the centre moved the centre", f);

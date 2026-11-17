@@ -40,6 +40,12 @@ pub(crate) fn extent(f: &TurnedBox, n: Vec2, origin: Point) -> (f64, f64) {
     (c - half, c + half)
 }
 
+/// The extents of the box round an outline along a page axis `n` and across it, relative to `origin`.
+fn outline_extents(r: &kurbo::Rect, n: Vec2, origin: Point) -> ((f64, f64), (f64, f64)) {
+    let (x, y) = ((r.x0 - origin.x, r.x1 - origin.x), (r.y0 - origin.y, r.y1 - origin.y));
+    if n.x.abs() > 0.5 { (x, y) } else { (y, (-x.1, -x.0)) }
+}
+
 /// A row, the subject's extent in it, and whether the row was cut short.
 pub(crate) struct Row {
     pub objs: Vec<RowObj>,
@@ -75,11 +81,16 @@ pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bo
     let objs = g
         .items
         .iter()
-        .filter_map(|c| tt.objects.get(c.index as usize))
-        .filter(|o| o.parts.spacing)
-        .filter(|o| !own || crate::angle::wrap(o.frame.angle - subject.angle, quarter).abs() <= cx.co.angle)
-        .map(|o| {
-            let ((l, h), (a, b)) = (extent(&o.frame, n, cx.o), extent(&o.frame, t, cx.o));
+        .filter_map(|c| tt.objects.get(c.index as usize).map(|o| (c.index, o)))
+        .filter(|(_, o)| o.parts.spacing)
+        .filter(|(_, o)| !own || crate::angle::wrap(o.frame.angle - subject.angle, quarter).abs() <= cx.co.angle)
+        .map(|(i, o)| {
+            // A page row reads the box round an object's outline when there is one; an own row reads its own sides.
+            let page = if own { None } else { cx.bounds_of(i) };
+            let ((l, h), (a, b)) = match page {
+                Some(r) => outline_extents(&r, n, cx.o),
+                None => (extent(&o.frame, n, cx.o), extent(&o.frame, t, cx.o)),
+            };
             RowObj { id: o.id, lo: l, hi: h, c0: a, c1: b }
         })
         .filter(|o| o.c0 < c1 && c0 < o.c1)

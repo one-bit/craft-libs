@@ -101,6 +101,9 @@ pub struct Query<'a> {
     /// Grids and ruler ticks, each with its kind.
     pub lattices: &'a [Lattice],
     pub budget: Budget,
+    /// The box round the subject's outline, in the app's frame, when it differs from the box round its corners: used for the page's
+    /// directions when `Settings::box_round` says `Paths`. It moves with the subject.
+    pub bounds: Option<kurbo::Rect>,
 }
 
 /// Places and outlines an app builds only for the few objects near the subject.
@@ -109,6 +112,11 @@ pub trait Detail {
     fn points(&mut self, id: Id, spend: &mut Spend<'_>, out: &mut Vec<(Point, Kind, u32)>);
     /// The outline of object `id`, for vertex, midpoint, nearest, intersection, tangent and perpendicular snaps.
     fn outline(&mut self, id: Id, spend: &mut Spend<'_>, out: &mut Vec<BezPath>);
+    /// The box round the outline of object `id`, in the app's frame, for the objects near the subject when `Settings::box_round` says `Paths`.
+    /// It is asked once for each object near, charged to `Budget::outlines`, and the source charges what reading cost.
+    fn bounds(&mut self, _id: Id, _spend: &mut Spend<'_>) -> Option<kurbo::Rect> {
+        None
+    }
 }
 
 /// For apps that give everything to the builder.

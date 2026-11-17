@@ -118,6 +118,9 @@ fn equal_lengths(cx: &mut Ctx<'_>, value: f64, width: bool, hit: Option<Id>) -> 
             if !Work::charge(&mut cx.work.line_steps, cap, 1, &mut cx.work.cut, &mut cx.work.truncated, Cuts::LINE_STEPS) {
                 break;
             }
+            if !cx.in_scope(l.id) {
+                continue;
+            }
             count = count.saturating_add(1);
             named = Some(named.map_or(l.id, |n| n.min(l.id)));
         }
