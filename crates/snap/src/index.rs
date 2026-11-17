@@ -1035,4 +1035,32 @@ mod tests {
             assert!(found.items.iter().any(|c| c.id.0 == id), "{width}: {found:?}");
         }
     }
+
+    /// Runs `work` on its own thread and fails when it has not finished in ten seconds, so that a loop that does not end is a failed test and not a
+    /// hung one.
+    fn finishes<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(work());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap_or_else(|_| panic!("the gather did not finish in ten seconds"))
+    }
+
+    #[test]
+    fn a_window_a_trillion_wide_is_narrowed_to_its_middle_and_says_so() {
+        let found = finishes(|| {
+            let mut items: Vec<Cell> = small(30, 10);
+            items.push(cell(1, 0.0, 0.0, 1.0, 1.0));
+            items.push(cell(2, 1.0e11, 0.0, 1.0, 1.0));
+            let g = Grid::build(items);
+            // Wide across and tall, with the pointer box at the middle: the window is far wider than the buckets it may look in.
+            let wide = g.gather(&Rect::new(-1.0e12, -1.0e12, 1.0e12, 1.0e12), 100, 100_000);
+            let thin = g.gather(&Rect::new(-1.0e12, 0.2, 1.0e12, 0.8), 100, 100_000);
+            (wide.cut, wide.visited, wide.items.iter().any(|c| c.id.0 == 1), thin.cut, thin.visited, thin.items.iter().any(|c| c.id.0 == 1))
+        });
+        let (cut, visited, middle, thin_cut, thin_visited, thin_middle) = found;
+        assert!(cut && thin_cut, "a narrowed window says it was");
+        assert!(visited <= 100 && thin_visited <= 100, "{visited} {thin_visited}");
+        assert!(middle && thin_middle, "the box at the middle of the window is found");
+    }
 }
