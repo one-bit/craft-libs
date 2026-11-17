@@ -16,7 +16,8 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
 - **Policy is data.** `Settings` holds, per kind, whether it is on, how far it pulls (`Reach::Screen`, `Document` or `Any`), its priority and
   its scope; the tie rule (`Choose::Nearest` or `Ranked`); how places compete with lines; which sides meet which lines (`Matching::AnyToAny`,
   `LikeToLike`, `SameSide`); the families of lines; spacing rows (`Band`, or `Linked`: a staircase of objects is a row) and gaps; size axes; the angle period; how far a line mark runs
-  (`LineSpan::Every` or `Nearest`); and what counts as the same place (`Coincide`).
+  (`LineSpan::Every` or `Nearest`); and what counts as the same place (`Coincide`, which `Coincide::at(far)` widens by what a coordinate as large as
+  `far` cannot say; a query does that itself for the largest coordinate of its subject and of the result).
 - **Constraints and rounding are solved inside the snap.** An axis lock, a ray, a kept aspect ratio (from a corner or a side handle), sides that
   move together, a hard lattice of angles, and a rounding lattice all limit the candidates, so the result satisfies them. A candidate that a
   rounding takes off its line is dropped and the next is tried. A resize under a rounding rounds the point that leads the drag: the middle of a
