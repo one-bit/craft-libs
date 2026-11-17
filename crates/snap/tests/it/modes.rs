@@ -514,6 +514,26 @@ mod reach_across {
     }
 
     #[test]
+    fn the_nearest_line_of_a_kind_wins_whichever_object_is_visited_first_and_a_tie_goes_to_the_lower_id() {
+        let mid = Anchors { min: false, mid: true, max: false };
+        let at = |t: &craft_snap::Targets| {
+            let st = settings(100.0);
+            let q = query(Subject::Box { frame: frame(0.0, 0.0, 2.0, 2.0, 0.0), bounds: None, u: mid, v: Anchors::NONE, own: &[] }, &st);
+            let r = run(t, &q);
+            r.check(t, &q).unwrap();
+            r
+        };
+        // The object nearer the window's middle has the farther line: 2.9 against 1.9.
+        let t = scene(&[(1, frame(3.0, 0.0, 0.2, 2.0, 0.0)), (2, frame(-2.0, 40.0, 0.2, 2.0, 0.0))], &[], &[]);
+        assert!((at(&t).delta.x + 1.9).abs() < 1e-9, "{:?}", at(&t).delta);
+        // Equal distances (2.0 either way, exactly): the lower id, whichever is visited first.
+        let tie = scene(&[(3, frame(-2.25, 0.0, 0.5, 2.0, 0.0)), (7, frame(2.25, 30.0, 0.5, 2.0, 0.0))], &[], &[]);
+        assert!((at(&tie).delta.x + 2.0).abs() < 1e-9, "{:?}", at(&tie).delta);
+        let tie_other_way = scene(&[(7, frame(-2.25, 0.0, 0.5, 2.0, 0.0)), (3, frame(2.25, 30.0, 0.5, 2.0, 0.0))], &[], &[]);
+        assert!((at(&tie_other_way).delta.x - 2.0).abs() < 1e-9, "{:?}", at(&tie_other_way).delta);
+    }
+
+    #[test]
     fn lines_in_another_direction_are_not_lines_of_this_one() {
         // The object's horizontal lines lie at y = 50 (its centre) and near 48 and 52, which are where the subject's vertical sides are in x; its
         // vertical lines are at x = 500. Aligning in x must find none of them.
