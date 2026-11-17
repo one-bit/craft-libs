@@ -496,14 +496,16 @@ mod reach_across {
         for a in [0.3, 1.0, 1.5, 2.0, 2.8, 3.5, 4.0, 5.5] {
             let (c, s) = (f64::cos(a), f64::sin(a));
             // One object turned by `a`; the subject turned alike, moved 2 along its own u and 0.5 along its own v.
-            let t = scene(&[(1, frame(0.0, 0.0, 20.0, 8.0, a))], &[], &[]);
+            // Off the origin and asymmetric, so that a sign or an end of a span turned the wrong way shows.
+            let at = Point::new(13.0, -7.0);
+            let t = scene(&[(1, frame(at.x, at.y, 20.0, 8.0, a))], &[], &[]);
             let st = Settings { frames: Frames { page: false, own: true }, ..settings(100.0) };
-            let f = frame(2.0 * c - 0.5 * s, 2.0 * s + 0.5 * c, 20.0, 8.0, a);
+            let f = frame(at.x + 2.0 * c - 0.5 * s, at.y + 2.0 * s + 0.5 * c, 20.0, 8.0, a);
             let q = query(Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &[] }, &st);
             let r = run(&t, &q);
             r.check(&t, &q).unwrap_or_else(|b| panic!("{a}: {b:?}"));
             assert!(r.hits.iter().any(|h| h.side.is_some_and(|(_, own)| own == craft_snap::OwnOrBounds::Own)), "{a}: {:?}", r.hits);
-            assert!((r.frame.unwrap().centre - Point::ORIGIN).hypot() < 1e-9, "{a}: it lands back on the object's sides: {:?}", r.frame);
+            assert!((r.frame.unwrap().centre - at).hypot() < 1e-9, "{a}: it lands back on the object's sides: {:?}", r.frame);
             // The segment of a mark runs along the object's side and the subject's, which coincide here: it is no longer than one of them.
             for m in &r.marks {
                 if let craft_snap::Mark::Line { segment, .. } = m {
@@ -531,6 +533,31 @@ mod reach_across {
         assert!((at(&tie).delta.x + 2.0).abs() < 1e-9, "{:?}", at(&tie).delta);
         let tie_other_way = scene(&[(7, frame(-2.25, 0.0, 0.5, 2.0, 0.0)), (3, frame(2.25, 30.0, 0.5, 2.0, 0.0))], &[], &[]);
         assert!((at(&tie_other_way).delta.x - 2.0).abs() < 1e-9, "{:?}", at(&tie_other_way).delta);
+        // The nearer line is the first visited object's and has the higher id; the farther one is visited later with the lower id: the nearer stays.
+        let keep = scene(&[(5, frame(2.0, 0.0, 0.2, 2.0, 0.0)), (2, frame(-3.0, 30.0, 0.2, 2.0, 0.0))], &[], &[]);
+        assert!((at(&keep).delta.x - 1.9).abs() < 1e-9, "{:?}", at(&keep).delta);
+    }
+
+    #[test]
+    fn a_kind_that_is_off_gives_no_line_within_a_reach_across() {
+        let mut st = settings(100.0);
+        st.kinds.set(Kind::Edge, KindRule { on: false, reach: Reach::Screen(6.0), priority: 3, scope: Scope::All });
+        let t = scene(&[(1, frame(3.0, 0.0, 2.0, 2.0, 0.0))], &[], &[]);
+        // The box's middle is 0; the object's edges are at 2 and 4 and its centre at 3: with edges off, only the centre can be met.
+        let q = query(
+            Subject::Box {
+                frame: frame(0.0, 0.0, 2.0, 2.0, 0.0),
+                bounds: None,
+                u: Anchors { min: false, mid: true, max: false },
+                v: Anchors::NONE,
+                own: &[],
+            },
+            &st,
+        );
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(r.hits.iter().all(|h| h.kind != Kind::Edge) && !r.hits.is_empty(), "{:?}", r.hits);
+        assert!(r.marks.iter().all(|m| !matches!(m, craft_snap::Mark::Line { kinds, .. } if kinds.contains(&Kind::Edge))));
     }
 
     #[test]
