@@ -15,6 +15,7 @@ pub mod kind;
 pub mod labels;
 mod marks;
 mod moves;
+mod nudge;
 pub mod osnap;
 pub mod query;
 mod resize;

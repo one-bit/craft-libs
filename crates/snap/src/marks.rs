@@ -30,6 +30,7 @@ fn final_probes(cx: &Ctx<'_>, sol: &Solution) -> Vec<Probe> {
     match (cx.q.subject, sol.point, sol.frame) {
         (Subject::Point { .. }, Some(p), _) => point_probes(cx, p),
         (Subject::Box { u, v, .. }, _, Some(f)) => box_probes(cx, &f, u, v),
+        (Subject::Nudge { .. }, _, Some(f)) => box_probes(cx, &f, crate::frame::Anchors::ALL, crate::frame::Anchors::ALL),
         (Subject::Edges { moving, .. }, _, Some(f)) => crate::resize::edge_probes(cx, &f, &moving),
         _ => Vec::new(),
     }

@@ -175,6 +175,60 @@ pub(crate) fn lines_find(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, on: b
     out
 }
 
+/// The entry of a sorted set that is the first strictly ahead of `s` (not the place `s` is on): above it when `up`, else below.
+fn ahead_in<'e>(cx: &Ctx<'_>, entries: &'e [Entry], s: f64, up: bool) -> Option<&'e Entry> {
+    if up {
+        let i = entries.partition_point(|e| e.offset < s || cx.co.same(e.offset, s));
+        entries.get(i)
+    } else {
+        let i = entries.partition_point(|e| e.offset < s && !cx.co.same(e.offset, s));
+        entries.get(i.checked_sub(1)?)
+    }
+}
+
+/// The nearest line of each kind strictly ahead of the offset `s` of a side, above it when `up`, else below: for a nudge.
+pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: bool, reach: f64) -> Vec<Found> {
+    let mut out = Vec::new();
+    // Lattices: the next line past the one the side is on.
+    for lat in cx.q.lattices {
+        let (axis_x, axis_y) = (angle.abs() <= cx.co.angle, (angle - FRAC_PI_2).abs() <= cx.co.angle);
+        if !(axis_x || axis_y) || !cx.rule(lat.kind).on || !matches(cx, lat.kind, side) {
+            continue;
+        }
+        let (origin, pitch, o) = if axis_x { (lat.origin.x, lat.pitch.x, cx.o.x) } else { (lat.origin.y, lat.pitch.y, cx.o.y) };
+        if !(pitch.is_finite() && pitch > 0.0 && origin.is_finite()) {
+            continue;
+        }
+        let n = (o + s - origin) / pitch;
+        let line = |k: f64| origin + k * pitch - o;
+        let first = if up { n.floor() + 1.0 } else { n.ceil() - 1.0 };
+        let k = if cx.co.same(line(first), s) { if up { first + 1.0 } else { first - 1.0 } } else { first };
+        if k.is_finite() && k.abs() <= 4_503_599_627_370_496.0 {
+            out.push(Found { kind: lat.kind, id: None, c: line(k), count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
+        }
+    }
+    let t = cx.t;
+    let mut tables: Vec<&DirTable> = vec![&t.app];
+    if cx.s.align_reach.is_none_or(|r| matches!(r, Reach::Any)) {
+        tables.push(t.object_lines(&mut cx.work.made));
+    }
+    for table in tables {
+        cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(table.dirs.len()));
+        let Some(dir) = table.find(angle, &cx.co) else { continue };
+        let sets: Vec<_> = dir.sets.iter().filter(|set| cx.rule(set.kind).on && matches(cx, set.kind, side)).collect();
+        for set in sets {
+            cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(set.entries.len()));
+            out.extend(ahead_in(cx, &set.entries, s, up).map(|e| Found { kind: set.kind, id: e.id, c: e.offset, count: e.count, lo: e.lo, hi: e.hi }));
+        }
+    }
+    if let Some(r) = cx.s.align_reach.filter(|r| !matches!(r, Reach::Any)) {
+        let mut near = Vec::new();
+        from_near_objects(cx, r.document(cx.zoom).max(reach), angle, s, side, false, &mut near);
+        out.extend(near.into_iter().filter(|f| if up { f.c > s && !cx.co.same(f.c, s) } else { f.c < s && !cx.co.same(f.c, s) }));
+    }
+    out
+}
+
 /// The nearest line of each kind to the offset `s` of a side of the subject in the direction `angle`.
 pub(crate) fn lines_near(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side) -> Vec<Found> {
     lines_find(cx, angle, s, side, false)

@@ -146,6 +146,13 @@ fn constraint(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
                 return broken("an axis lock moved the other axis", snapped.delta);
             }
         }
+        _ if matches!(q.subject, Subject::Nudge { .. }) => {
+            let Subject::Nudge { axis, .. } = q.subject else { return Ok(()) };
+            let off = if axis == Axis::X { snapped.delta.y } else { snapped.delta.x };
+            if off != 0.0 {
+                return broken("a nudge left its axis", snapped.delta);
+            }
+        }
         Constraint::Ray { origin, dir } => {
             if let Some(p) = reference {
                 let e = dir / dir.hypot();

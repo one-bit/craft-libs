@@ -82,7 +82,7 @@ pub fn snap(targets: &Targets, query: &Query<'_>, detail: &mut dyn Detail) -> Sn
         Subject::Box { frame, u, v, own } => moves::solve_box(&mut cx, detail, frame, u, v, own),
         Subject::Edges { frame, moving } => resize::solve_edges(&mut cx, detail, frame, moving),
         Subject::Rotate { angle, radius, step, .. } => crate::angle::solve_rotate(&mut cx, angle, radius, step),
-        Subject::Nudge { .. } => Solution::new(),
+        Subject::Nudge { frame, axis, forward, step } => crate::nudge::solve_nudge(&mut cx, frame, axis, forward, step),
     };
     let marks = marks::derive(&mut cx, &sol);
     finish(cx.work, sol, marks)

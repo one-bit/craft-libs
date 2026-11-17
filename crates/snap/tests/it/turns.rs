@@ -80,3 +80,60 @@ fn a_full_turn_is_one_and_a_period_of_half_a_turn_matches_across_it() {
     assert!((r.angle.unwrap() - 190f64.to_radians()).abs() < 1e-12, "{:?}", r.angle);
     r.check(&t, &q).unwrap();
 }
+
+mod nudges {
+    use craft_snap::{Axis, Kind, Mark, Settings, Subject};
+    use kurbo::Point;
+
+    use crate::common::*;
+
+    fn nudge(f: craft_snap::TurnedBox, axis: Axis, forward: bool, step: f64) -> Subject<'static> {
+        Subject::Nudge { frame: f, axis, forward, step }
+    }
+
+    #[test]
+    fn a_nudge_stops_at_the_first_guide_ahead_within_a_step_and_the_next_press_moves_off_it() {
+        let t = scene(&[], &[10.1], &[]);
+        let s = Settings::default();
+        let f = frame(0.0, 0.0, 20.0, 4.0, 0.0);
+        // The box's right side is at 10; a guide at 10.1 is 0.1 ahead of a step of 0.25.
+        let q = query(nudge(f, Axis::X, true, 0.25), &s);
+        let r = run(&t, &q);
+        assert!((r.delta.x - 0.1).abs() < 1e-12 && r.delta.y == 0.0, "{:?}", r.delta);
+        assert!(r.marks.iter().any(|m| matches!(m, Mark::Line { kinds, .. } if kinds == &[Kind::Guide])));
+        r.check(&t, &q).unwrap();
+        let on = r.frame.unwrap();
+        let again = query(nudge(on, Axis::X, true, 0.25), &s);
+        let r2 = run(&t, &again);
+        assert!((r2.delta.x - 0.25).abs() < 1e-12, "the guide it is on is not ahead: {:?}", r2.delta);
+        r2.check(&t, &again).unwrap();
+        // The other way there is nothing within a step.
+        let back = query(nudge(f, Axis::X, false, 0.25), &s);
+        let r3 = run(&t, &back);
+        assert!((r3.delta.x + 0.25).abs() < 1e-12);
+        let _ = Point::ORIGIN;
+    }
+
+    #[test]
+    fn a_nudge_takes_a_whole_step_when_nothing_is_ahead_within_it() {
+        let t = scene(&[], &[10.6], &[]);
+        let s = Settings::default();
+        let q = query(nudge(frame(0.0, 0.0, 20.0, 4.0, 0.0), Axis::X, true, 0.25), &s);
+        let r = run(&t, &q);
+        assert_eq!(r.delta.x, 0.25);
+        r.check(&t, &q).unwrap();
+    }
+
+    #[test]
+    fn a_turned_boxs_own_side_ahead_stops_a_nudge_along_the_axis() {
+        // A box turned by 30 degrees has a side whose line meets the x axis at a slant: the travel is (c - side) / (n . e).
+        let t = scene(&[(1, frame(50.0, 0.0, 10.0, 10.0, 30f64.to_radians()))], &[], &[]);
+        let s = Settings::default();
+        let f = frame(0.0, 0.0, 10.0, 10.0, 30f64.to_radians());
+        let q = query(nudge(f, Axis::X, true, 100.0), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(r.delta.x > 0.0 && r.delta.x < 100.0, "{:?}", r.delta);
+        assert!(!r.hits.is_empty());
+    }
+}
