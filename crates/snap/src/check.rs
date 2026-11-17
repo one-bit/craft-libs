@@ -1,0 +1,236 @@
+//! The check of a result: that every mark is true on the geometry the result returns, and that the constraint and the rounding hold there.
+//!
+//! It reads the targets by brute force (every object, every line entry, every lattice), not through the indexes, so that an index that
+//! misses a line cannot also hide a mark that is not true.
+
+use std::f64::consts::PI;
+
+use kurbo::{Point, Vec2};
+
+use crate::frame::{Axis, Coincide, unit};
+use crate::index::canon;
+use crate::kind::Kind;
+use crate::query::{Constraint, Query, Rounding, Subject};
+use crate::result::{Broken, Mark, Snapped};
+use crate::targets::{SideLine, Targets, side_kind, side_lines};
+
+fn broken(rule: &'static str, what: impl std::fmt::Debug) -> Result<(), Broken> {
+    Err(Broken { rule, what: format!("{what:?}") })
+}
+
+/// Whether two directions, as normal angles, are one within the tolerance (the half turn wraps).
+fn same_direction(a: f64, b: f64, co: &Coincide) -> bool {
+    let x = (a - b).rem_euclid(PI);
+    x.min(PI - x) <= co.angle
+}
+
+/// The sides of the final geometry, in the canonical form of a line: the canonical angle, the offset and the extent.
+fn final_sides(t: &Targets, snapped: &Snapped, q: &Query<'_>) -> Vec<SideLine> {
+    let co = &q.settings.coincide;
+    if let Some(f) = snapped.frame {
+        return side_lines(&f, t.origin, co, true);
+    }
+    match snapped.point {
+        Some(p) => {
+            let rel = p - t.origin;
+            let mut angles = vec![0.0, std::f64::consts::FRAC_PI_2];
+            angles.extend(t.app_directions());
+            angles
+                .into_iter()
+                .map(|a| {
+                    let (n, tn) = (unit(a), Vec2::new(-unit(a).y, unit(a).x));
+                    SideLine {
+                        angle: a,
+                        side: crate::frame::Side::Mid,
+                        own: crate::frame::OwnOrBounds::Bounds,
+                        offset: n.dot(rel),
+                        lo: tn.dot(rel),
+                        hi: tn.dot(rel),
+                    }
+                })
+                .collect()
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Whether the targets hold a line of `kind` in the direction `angle` (canonical) at `c`.
+fn target_line(t: &Targets, q: &Query<'_>, kind: Kind, angle: f64, c: f64) -> bool {
+    let co = &q.settings.coincide;
+    let in_entries = t
+        .app
+        .dirs
+        .iter()
+        .filter(|d| same_direction(d.angle, angle, co))
+        .flat_map(|d| d.sets.iter())
+        .filter(|s| s.kind == kind)
+        .any(|s| s.entries.iter().any(|e| co.same(e.offset, c)));
+    if in_entries {
+        return true;
+    }
+    let from_object = t.objects.iter().any(|o| {
+        (o.parts.bounds_lines || o.parts.own_lines)
+            && side_lines(&o.frame, t.origin, co, o.parts.own_lines).iter().any(|l| {
+                let (a, flipped) = canon(l.angle, co.angle);
+                side_kind(l.side) == kind && same_direction(a, angle, co) && co.same(if flipped { -l.offset } else { l.offset }, c)
+            })
+    });
+    from_object || lattice_line(t, q, kind, angle, c)
+}
+
+fn lattice_line(t: &Targets, q: &Query<'_>, kind: Kind, angle: f64, c: f64) -> bool {
+    let co = &q.settings.coincide;
+    q.lattices.iter().filter(|l| l.kind == kind).any(|l| {
+        let (origin, pitch, o) = if same_direction(angle, 0.0, co) {
+            (l.origin.x, l.pitch.x, t.origin.x)
+        } else if same_direction(angle, std::f64::consts::FRAC_PI_2, co) {
+            (l.origin.y, l.pitch.y, t.origin.y)
+        } else {
+            return false;
+        };
+        let n = ((o + c - origin) / pitch).round();
+        pitch.is_finite() && pitch > 0.0 && co.same(origin + n * pitch - o, c)
+    })
+}
+
+/// A line mark: a side of the final geometry is on it, its segment covers that side, and a line of each kind it names is in the targets.
+fn line_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
+    let Mark::Line { direction, offset, segment, kinds, .. } = m else { return Ok(()) };
+    let co = &q.settings.coincide;
+    let (ac, _) = canon(direction.angle(), co.angle);
+    let (n, tn) = (unit(ac), Vec2::new(-unit(ac).y, unit(ac).x));
+    let c = n.dot(segment.p0 - t.origin);
+    let (t0, t1) = (tn.dot(segment.p0 - t.origin), tn.dot(segment.p1 - t.origin));
+    if !(segment.p0.is_finite() && segment.p1.is_finite() && offset.is_finite()) {
+        return broken("a line mark is not finite", m);
+    }
+    if !co.same(n.dot(segment.p1 - t.origin), c) {
+        return broken("a line mark's segment is not along its line", m);
+    }
+    let on = final_sides(t, snapped, q).into_iter().any(|s| {
+        let (a, flipped) = canon(s.angle, co.angle);
+        let (off, lo, hi) = if flipped { (-s.offset, -s.hi, -s.lo) } else { (s.offset, s.lo, s.hi) };
+        let tol = co.tol(t0.max(t1), lo.max(hi));
+        same_direction(a, ac, co) && co.same(off, c) && t0.min(t1) <= lo + tol && t0.max(t1) >= hi - tol
+    });
+    if !on {
+        return broken("no side of the final geometry is on a line mark, or its segment does not cover it", m);
+    }
+    for k in kinds {
+        if !target_line(t, q, *k, ac, c) {
+            return broken("a line mark names a target that is not in the set", m);
+        }
+    }
+    Ok(())
+}
+
+/// The constraint holds on the returned geometry.
+fn constraint(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
+    let co = &q.settings.coincide;
+    let reference = snapped.frame.map(|f| f.centre).or(snapped.point);
+    match q.constraint {
+        Constraint::Axis(a) if matches!(q.subject, Subject::Point { .. } | Subject::Box { .. }) => {
+            let off = if a == Axis::X { snapped.delta.y } else { snapped.delta.x };
+            if off != 0.0 {
+                return broken("an axis lock moved the other axis", snapped.delta);
+            }
+        }
+        Constraint::Ray { origin, dir } => {
+            if let Some(p) = reference {
+                let e = dir / dir.hypot();
+                let off = (p - origin).cross(e).abs();
+                if off > co.tol(off, p.x.abs().max(p.y.abs())) {
+                    return broken("the reference point left the ray", p);
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn on_lattice(co: &Coincide, v: f64, step: f64) -> bool {
+    !(step.is_finite() && step > 0.0) || co.same(v, (v / step).round() * step) || !(v / step).is_finite()
+}
+
+/// The rounding holds: the distance moved, or the min corner, is on its lattice, on the axes the constraint leaves to it.
+fn rounding(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
+    let co = &q.settings.coincide;
+    let free = |a: Axis| match q.constraint {
+        Constraint::Axis(l) => l == a,
+        Constraint::Ray { dir, .. } => (a == Axis::X) == (dir.x.abs() >= dir.y.abs()),
+        _ => true,
+    };
+    let (refp, minp) = match (snapped.frame, snapped.point) {
+        (Some(f), _) => {
+            let b = f.bounds();
+            (f.centre, Point::new(b.x0, b.y0))
+        }
+        (None, Some(p)) => (p, p),
+        _ => return Ok(()),
+    };
+    let axes = [(Axis::X, refp.x, minp.x), (Axis::Y, refp.y, minp.y)];
+    for (axis, r, m) in axes.into_iter().filter(|(a, _, _)| free(*a)) {
+        let ok = match q.rounding {
+            Rounding::None => true,
+            Rounding::Delta { step, from } => {
+                let (s, f) = if axis == Axis::X { (step.x, from.x) } else { (step.y, from.y) };
+                on_lattice(co, r - f, s)
+            }
+            Rounding::Position(step) => on_lattice(co, m, if axis == Axis::X { step.x } else { step.y }),
+        };
+        if !ok {
+            return broken("the rounding does not hold", (axis, refp, minp));
+        }
+    }
+    Ok(())
+}
+
+/// The angle of a moved subject is the subject's, to the bit.
+fn angle_unchanged(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
+    let before = match q.subject {
+        Subject::Box { frame, .. } | Subject::Edges { frame, .. } | Subject::Nudge { frame, .. } => Some(frame.angle),
+        _ => None,
+    };
+    match (before, snapped.frame) {
+        (Some(a), Some(f)) if a.to_bits() != f.angle.to_bits() => broken("the angle of the subject changed", (a, f.angle)),
+        _ => Ok(()),
+    }
+}
+
+/// Every hit that is a line has a mark that says so, unless the marks were cut.
+fn hits_have_marks(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
+    let co = &q.settings.coincide;
+    if snapped.work.cut.has(crate::budget::Cuts::MARKS) {
+        return Ok(());
+    }
+    for h in &snapped.hits {
+        let Some(d) = h.direction else { continue };
+        let found = snapped.marks.iter().any(|m| matches!(m, Mark::Line { direction, kinds, hit: true, .. } if same_direction(direction.angle(), d.angle(), co) && kinds.contains(&h.kind)));
+        if !found {
+            return broken("a hit has no mark", h);
+        }
+    }
+    Ok(())
+}
+
+impl Snapped {
+    /// Checks both ways that every mark is true. It must hold on the final geometry, the constraint and the rounding, and the target it names
+    /// must be in the set: a line of those kinds there, the row's objects at a gap's ends, an object of that length or angle, a place there.
+    /// This is what the tests assert.
+    pub fn check(&self, targets: &Targets, query: &Query<'_>) -> Result<(), Broken> {
+        if self.work.refused.is_some() {
+            return if self.delta == Vec2::ZERO && self.marks.is_empty() { Ok(()) } else { broken("a refused query moved the subject", &self.delta) };
+        }
+        angle_unchanged(self, query)?;
+        constraint(self, query)?;
+        rounding(self, query)?;
+        for m in &self.marks {
+            line_mark(targets, query, self, m)?;
+        }
+        if self.work.marks_dropped != 0 {
+            return broken("marks were dropped", self.work.marks_dropped);
+        }
+        hits_have_marks(self, query)
+    }
+}

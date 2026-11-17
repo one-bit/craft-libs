@@ -8,10 +8,10 @@ use std::f64::consts::{FRAC_PI_2, PI};
 
 use kurbo::Vec2;
 
-use crate::budget::Cuts;
+use crate::budget::{Cuts, Work};
 use crate::ctx::{Cand, Ctx, Probe, grown};
 use crate::frame::{Id, Side};
-use crate::index::{DirTable, canon, log_steps};
+use crate::index::{DirTable, Entry, canon, log_steps};
 use crate::kind::{Kind, Reach};
 use crate::settings::Matching;
 use crate::targets::{side_kind, side_lines};
@@ -23,6 +23,9 @@ pub(crate) struct Found {
     pub id: Option<Id>,
     pub c: f64,
     pub count: u32,
+    /// The extent along the line (empty, `lo > hi`, for a line that runs on for ever).
+    pub lo: f64,
+    pub hi: f64,
 }
 
 /// How the subject travels for a line: along the line's normal (its two degrees free), or along a direction (a constraint left one).
@@ -40,8 +43,23 @@ fn matches(cx: &Ctx<'_>, kind: Kind, side: Side) -> bool {
     }
 }
 
-/// The nearest line of each kind in one table, to the offset `s` in the direction `angle`.
-fn from_table(cx: &mut Ctx<'_>, table: &DirTable, angle: f64, s: f64, side: Side, out: &mut Vec<Found>) {
+/// The entries of a sorted set that are at `s`, charged to `line_steps`, walking out from its insertion point.
+fn entries_on<'e>(cx: &mut Ctx<'_>, entries: &'e [Entry], s: f64) -> Vec<&'e Entry> {
+    let i = entries.partition_point(|e| e.offset < s);
+    let cap = u64::from(cx.budget().line_steps);
+    let mut out = Vec::new();
+    let (below, above) = entries.split_at(i.min(entries.len()));
+    for e in below.iter().rev().take_while(|e| cx.co.same(e.offset, s)).chain(above.iter().take_while(|e| cx.co.same(e.offset, s))) {
+        if !Work::charge(&mut cx.work.line_steps, cap, 1, &mut cx.work.cut, &mut cx.work.truncated, Cuts::LINE_STEPS) {
+            break;
+        }
+        out.push(e);
+    }
+    out
+}
+
+/// The lines of each kind in one table: the nearest to the offset `s` in the direction `angle`, or, with `on`, all those at `s`.
+fn from_table(cx: &mut Ctx<'_>, table: &DirTable, angle: f64, s: f64, side: Side, on: bool, out: &mut Vec<Found>) {
     cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(table.dirs.len()));
     let Some(dir) = table.find(angle, &cx.co) else { return };
     for set in &dir.sets {
@@ -49,14 +67,18 @@ fn from_table(cx: &mut Ctx<'_>, table: &DirTable, angle: f64, s: f64, side: Side
             continue;
         }
         cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(set.entries.len()));
-        if let Some(e) = set.nearest(s).and_then(|i| set.entries.get(i)) {
-            out.push(Found { kind: set.kind, id: e.id, c: e.offset, count: e.count });
+        let found = |e: &Entry| Found { kind: set.kind, id: e.id, c: e.offset, count: e.count, lo: e.lo, hi: e.hi };
+        if on {
+            let list = entries_on(cx, &set.entries, s);
+            out.extend(list.into_iter().map(found));
+        } else {
+            out.extend(set.nearest(s).and_then(|i| set.entries.get(i)).map(found));
         }
     }
 }
 
-/// The nearest line of each kind of the lattices, when the direction is a page axis.
-fn from_lattices(cx: &Ctx<'_>, angle: f64, s: f64, side: Side, out: &mut Vec<Found>) {
+/// The nearest line of each kind of the lattices (or, with `on`, the one at `s`), when the direction is a page axis.
+fn from_lattices(cx: &Ctx<'_>, angle: f64, s: f64, side: Side, on: bool, out: &mut Vec<Found>) {
     let axis_x = angle.abs() <= cx.co.angle;
     let axis_y = (angle - FRAC_PI_2).abs() <= cx.co.angle;
     if !(axis_x || axis_y) {
@@ -68,8 +90,12 @@ fn from_lattices(cx: &Ctx<'_>, angle: f64, s: f64, side: Side, out: &mut Vec<Fou
             continue;
         }
         let n = ((o + s - origin) / pitch).round();
-        if n.is_finite() && n.abs() <= 4_503_599_627_370_496.0 {
-            out.push(Found { kind: lat.kind, id: None, c: origin + n * pitch - o, count: 1 });
+        if !(n.is_finite() && n.abs() <= 4_503_599_627_370_496.0) {
+            continue;
+        }
+        let c = origin + n * pitch - o;
+        if !on || cx.co.same(c, s) {
+            out.push(Found { kind: lat.kind, id: None, c, count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
         }
     }
 }
@@ -94,8 +120,8 @@ fn near_objects(cx: &mut Ctx<'_>, reach: f64) -> Vec<u32> {
     list
 }
 
-/// The nearest line of each object kind among the objects near the subject, tested directly.
-fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Side, out: &mut Vec<Found>) {
+/// The lines of the objects near the subject, tested directly: the nearest of each kind, or, with `on`, all those at `s`.
+fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Side, on: bool, out: &mut Vec<Found>) {
     let near = near_objects(cx, reach);
     let (t, co, o) = (cx.t, cx.co, cx.o);
     let mut best: Vec<Found> = Vec::new();
@@ -111,9 +137,16 @@ fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Sid
             if x.min(PI - x) > co.angle || !cx.rule(kind).on || !matches(cx, kind, side) {
                 continue;
             }
-            let found = Found { kind, id: Some(obj.id), c: if flipped { -l.offset } else { l.offset }, count: 1 };
+            let (c, lo, hi) = if flipped { (-l.offset, -l.hi, -l.lo) } else { (l.offset, l.lo, l.hi) };
+            let found = Found { kind, id: Some(obj.id), c, count: 1, lo, hi };
+            if on {
+                if co.same(c, s) {
+                    best.push(found);
+                }
+                continue;
+            }
             match best.iter_mut().find(|f| f.kind == kind) {
-                Some(f) if (found.c - s).abs() < (f.c - s).abs() || ((found.c - s).abs() == (f.c - s).abs() && found.id < f.id) => *f = found,
+                Some(f) if (c - s).abs() < (f.c - s).abs() || ((c - s).abs() == (f.c - s).abs() && found.id < f.id) => *f = found,
                 Some(_) => {}
                 None => best.push(found),
             }
@@ -122,24 +155,29 @@ fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Sid
     out.extend(best);
 }
 
-/// The nearest line of each kind to the offset `s` of a side of the subject in the direction `angle`: lattices, the app's lines and the
-/// objects' lines.
-pub(crate) fn lines_near(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side) -> Vec<Found> {
+/// The nearest line of each kind to the offset `s` of a side of the subject in the direction `angle` (with `on`: every line at `s`):
+/// lattices, the app's lines and the objects' lines.
+pub(crate) fn lines_find(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, on: bool) -> Vec<Found> {
     let mut out = Vec::new();
-    from_lattices(cx, angle, s, side, &mut out);
+    from_lattices(cx, angle, s, side, on, &mut out);
     let t = cx.t;
-    from_table(cx, &t.app, angle, s, side, &mut out);
+    from_table(cx, &t.app, angle, s, side, on, &mut out);
     match cx.s.align_reach {
         Some(r) if !matches!(r, Reach::Any) => {
             let reach = r.document(cx.zoom);
-            from_near_objects(cx, reach, angle, s, side, &mut out);
+            from_near_objects(cx, reach, angle, s, side, on, &mut out);
         }
         _ => {
             let table = t.object_lines(&mut cx.work.made);
-            from_table(cx, table, angle, s, side, &mut out);
+            from_table(cx, table, angle, s, side, on, &mut out);
         }
     }
     out
+}
+
+/// The nearest line of each kind to the offset `s` of a side of the subject in the direction `angle`.
+pub(crate) fn lines_near(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side) -> Vec<Found> {
+    lines_find(cx, angle, s, side, false)
 }
 
 /// The candidates of every side of one probe.
@@ -168,6 +206,7 @@ pub(crate) fn probe_cands(cx: &mut Ctx<'_>, probe: &Probe, free: Free) -> Vec<Ca
                 own: ps.own,
                 angle: probe.angle,
                 c: f.c,
+                s: ps.offset,
                 d: travel,
                 t: travel.abs(),
                 count: f.count,
@@ -189,7 +228,15 @@ mod tests {
     use crate::targets::{Limits, Object, Parts, TargetsBuilder};
 
     fn query<'a>(s: &'a Settings) -> Query<'a> {
-        Query { subject: Subject::Point { at: Point::ORIGIN, base: None }, zoom: 1.0, settings: s, constraint: Constraint::None, rounding: Rounding::None, lattices: &[], budget: Budget::default() }
+        Query {
+            subject: Subject::Point { at: Point::ORIGIN, base: None },
+            zoom: 1.0,
+            settings: s,
+            constraint: Constraint::None,
+            rounding: Rounding::None,
+            lattices: &[],
+            budget: Budget::default(),
+        }
     }
 
     fn built(objects: &[(u64, TurnedBox)], guides: &[f64]) -> crate::targets::Targets {
@@ -205,7 +252,13 @@ mod tests {
 
     #[test]
     fn the_nearest_line_of_each_kind_is_found_wherever_the_object_is() {
-        let t = built(&[(1, TurnedBox::square(Point::new(100.0, 50.0), Size::new(10.0, 4.0))), (2, TurnedBox::square(Point::new(-300.0, 0.0), Size::new(2.0, 2.0)))], &[7.0]);
+        let t = built(
+            &[
+                (1, TurnedBox::square(Point::new(100.0, 50.0), Size::new(10.0, 4.0))),
+                (2, TurnedBox::square(Point::new(-300.0, 0.0), Size::new(2.0, 2.0))),
+            ],
+            &[7.0],
+        );
         let s = Settings::default();
         let q = query(&s);
         let mut cx = Ctx::new(&t, &q);
@@ -225,7 +278,15 @@ mod tests {
         let s = Settings { matching: Matching::LikeToLike, ..Settings::default() };
         let q = query(&s);
         let mut cx = Ctx::new(&t, &q);
-        let kinds = |cx: &mut Ctx<'_>, side| { let at = 10.5 - cx.o.x; lines_near(cx, 0.0, at, side) }.iter().map(|f| f.kind).collect::<Vec<_>>();
+        let kinds = |cx: &mut Ctx<'_>, side| {
+            {
+                let at = 10.5 - cx.o.x;
+                lines_near(cx, 0.0, at, side)
+            }
+            .iter()
+            .map(|f| f.kind)
+            .collect::<Vec<_>>()
+        };
         let mid = kinds(&mut cx, Side::Mid);
         assert!(mid.contains(&Kind::Centre) && !mid.contains(&Kind::Edge) && mid.contains(&Kind::Guide), "{mid:?}");
         let min = kinds(&mut cx, Side::Min);
@@ -261,18 +322,18 @@ mod tests {
         let q = Query { lattices: &lat, ..query(&s) };
         let cx = Ctx::new(&t, &q);
         let mut out = Vec::new();
-        from_lattices(&cx, 0.0, 24.0, Side::Min, &mut out);
+        from_lattices(&cx, 0.0, 24.0, Side::Min, false, &mut out);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].c, 21.0);
         out.clear();
-        from_lattices(&cx, FRAC_PI_2, 24.0, Side::Min, &mut out);
+        from_lattices(&cx, FRAC_PI_2, 24.0, Side::Min, false, &mut out);
         assert!(out.is_empty(), "a pitch that is not a number has no lines");
-        from_lattices(&cx, 0.5, 24.0, Side::Min, &mut out);
+        from_lattices(&cx, 0.5, 24.0, Side::Min, false, &mut out);
         assert!(out.is_empty(), "a lattice is on the page axes");
         let huge = [crate::query::Lattice { origin: Point::ORIGIN, pitch: Vec2::new(1.0e-300, 1.0), kind: Kind::Grid }];
         let q = Query { lattices: &huge, ..query(&s) };
         let cx = Ctx::new(&t, &q);
-        from_lattices(&cx, 0.0, 24.0, Side::Min, &mut out);
+        from_lattices(&cx, 0.0, 24.0, Side::Min, false, &mut out);
         assert!(out.is_empty(), "a line number past 2^52 gives no line");
     }
 }

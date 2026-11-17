@@ -108,6 +108,8 @@ pub(crate) struct Cand {
     /// The direction's canonical angle, and the line's offset there, relative to the origin.
     pub angle: f64,
     pub c: f64,
+    /// Where the side of the subject is along that direction.
+    pub s: f64,
     /// The move along the normal that puts the side on the line.
     pub d: f64,
     /// How far the subject travels for it: its distance for the settings.
@@ -179,7 +181,20 @@ mod tests {
     use super::*;
 
     fn cand(t: f64, prio: u8, id: u64) -> Cand {
-        Cand { kind: Kind::Guide, id: Some(Id(id)), prio, reach: 1.0, side: Side::Min, own: OwnOrBounds::Bounds, angle: 0.0, c: t, d: t, t, count: 1 }
+        Cand {
+            kind: Kind::Guide,
+            id: Some(Id(id)),
+            prio,
+            reach: 1.0,
+            side: Side::Min,
+            own: OwnOrBounds::Bounds,
+            angle: 0.0,
+            c: t,
+            s: 0.0,
+            d: t,
+            t,
+            count: 1,
+        }
     }
 
     #[test]

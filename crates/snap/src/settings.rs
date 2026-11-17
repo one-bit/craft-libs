@@ -152,7 +152,10 @@ mod tests {
     #[test]
     fn the_defaults_are_the_documented_ones() {
         let s = Settings::default();
-        assert_eq!((s.choose, s.matching, s.marks, s.spacing_row, s.spacing_gaps, s.size_axes), (Choose::Nearest, Matching::AnyToAny, MarkRule::Coincident, SpacingRow::Band, SpacingGaps::Row, SizeAxes::SameAxis));
+        assert_eq!(
+            (s.choose, s.matching, s.marks, s.spacing_row, s.spacing_gaps, s.size_axes),
+            (Choose::Nearest, Matching::AnyToAny, MarkRule::Coincident, SpacingRow::Band, SpacingGaps::Row, SizeAxes::SameAxis)
+        );
         assert_eq!((s.frames, s.align_reach, s.angle_period), (Frames { page: true, own: true }, None, TAU));
         assert_eq!(s.places, Places::Compete { bias: 0.25 });
         assert_eq!(s.coincide, Coincide { abs: 1e-9, rel: 8.0 * f64::EPSILON, angle: 1e-9 });

@@ -262,7 +262,9 @@ impl TargetsBuilder {
         if !offset.is_finite() || (span.is_some() && !(lo.is_finite() && hi.is_finite())) {
             return self.refuse(Refused::NotFinite);
         }
-        self.add_line(RawLine { angle: direction.angle(), offset, lo: lo.min(hi), hi: lo.max(hi), kind, id })
+        // No span is an empty extent (`lo > hi`), which joins with any other; a span given the wrong way round is turned.
+        let (lo, hi) = if span.is_some() { (lo.min(hi), lo.max(hi)) } else { (lo, hi) };
+        self.add_line(RawLine { angle: direction.angle(), offset, lo, hi, kind, id })
     }
 
     fn add_line(&mut self, line: RawLine) -> Result<(), Refused> {
@@ -407,6 +409,9 @@ fn median_origin(objects: &[ObjectEntry], points: &[PointEntry]) -> Point {
     Point::new(mid(&mut xs), mid(&mut ys))
 }
 
+/// The most directions of the app's own lines, besides the page's, that a point is aligned along.
+pub(crate) const MAX_APP_DIRECTIONS: usize = 8;
+
 /// A set of targets. Build it once per gesture, without the objects that move, and ask it at every pointer move.
 pub struct Targets {
     pub(crate) co: Coincide,
@@ -433,6 +438,13 @@ impl Targets {
     /// The tolerance the lines were grouped by.
     pub fn coincide(&self) -> Coincide {
         self.co
+    }
+
+    /// The directions of the app's own lines that are not the page's, at most [`MAX_APP_DIRECTIONS`], by angle.
+    pub(crate) fn app_directions(&self) -> Vec<f64> {
+        let co = self.co;
+        let page = |a: f64| a.abs() <= co.angle || (a - FRAC_PI_2).abs() <= co.angle;
+        self.app.dirs.iter().map(|d| d.angle).filter(|a| !page(*a)).take(MAX_APP_DIRECTIONS).collect()
     }
 
     /// The point the targets are indexed about: the median of the centres of the objects and the places.

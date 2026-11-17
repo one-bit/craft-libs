@@ -48,13 +48,22 @@ pub enum Constraint {
     /// Only this page axis moves.
     Axis(Axis),
     /// The subject's reference point (a point, or a box's centre) stays on the ray. A box's own axis is a ray.
-    Ray { origin: Point, dir: Vec2 },
+    Ray {
+        origin: Point,
+        dir: Vec2,
+    },
     /// The box keeps its own width / height = `ratio`, about the fixed corner or side, or about its centre.
-    Aspect { ratio: f64, about: About },
+    Aspect {
+        ratio: f64,
+        about: About,
+    },
     /// Opposite sides move together: the centre stays.
     Centre,
     /// The angle is `zero` plus a whole number of `step`s.
-    Angles { step: f64, zero: f64 },
+    Angles {
+        step: f64,
+        zero: f64,
+    },
 }
 
 /// A lattice the result lands on.
@@ -63,7 +72,10 @@ pub enum Rounding {
     None,
     /// The distance moved from `from` (the reference point at the press: the point, or a box's centre) is a whole number of steps per page
     /// axis. A step of 0 or not finite leaves that axis alone.
-    Delta { step: Vec2, from: Point },
+    Delta {
+        step: Vec2,
+        from: Point,
+    },
     /// The point, or the min corner of the box round the subject, lands on the lattice of these steps.
     Position(Vec2),
 }
