@@ -142,6 +142,25 @@ fn a_lattice_of_angles_with_a_zero_off_the_origin_is_met_from_that_zero() {
     assert!((r.angle.unwrap() - (zero + 2.0 * step)).abs() < 1e-12, "{:?}", r.angle);
     r.check(&t, &soft).unwrap();
     assert!(matches!(r.marks.first(), Some(Mark::Angle { step: Some(_), .. })), "{:?}", r.marks);
+    // Where counting the steps from the origin and counting them from the zero round to different ones: 0.4 is 1.1 steps from the zero and 1.9 from 0.
+    let hard = craft_snap::Query { constraint: Constraint::Angles { step, zero }, ..query(rotate(0.4, 150.0, None), &s) };
+    let r = run(&t, &hard);
+    assert!((r.angle.unwrap() - (zero + step)).abs() < 1e-12, "{:?}", r.angle);
+    r.check(&t, &hard).unwrap();
+}
+
+#[test]
+fn a_turn_finds_the_nearest_angle_among_many_and_not_only_the_first_and_last() {
+    let degrees = [10.0f64, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0];
+    let angles: Vec<f64> = degrees.iter().map(|d| d.to_radians()).collect();
+    let t = turned_scene(&angles);
+    let s = Settings::default();
+    for (raw, want) in [(31.0f64, 30.0f64), (39.0, 40.0), (51.0, 50.0), (11.0, 10.0), (69.0, 70.0), (19.5, 20.0)] {
+        let q = query(rotate(raw.to_radians(), 150.0, None), &s);
+        let r = run(&t, &q);
+        assert_eq!(r.angle, Some(want.to_radians()), "{raw}");
+        r.check(&t, &q).unwrap();
+    }
 }
 
 mod nudges {
@@ -236,6 +255,10 @@ mod hostile {
                 let r = run(&t, &q);
                 if let Some(a) = r.angle {
                     assert!(on(a, step, 0.0), "{raw}: {a}");
+                }
+                // Up to a trillion the lattice is reachable and the turn is not refused: the angle is as exact as a number that size can be.
+                if base <= 1.0e12 {
+                    assert!(r.angle.is_some() && r.work.refused.is_none(), "{raw}: {:?}", r.work.refused);
                 }
                 r.check(&t, &q).unwrap_or_else(|b| panic!("{raw}: {b:?}"));
             }
