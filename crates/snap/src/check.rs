@@ -574,7 +574,8 @@ fn angle_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result
         let ok = t.objects.iter().any(|o| {
             o.id == *id
                 && o.parts.angle
-                && crate::angle::wrap(o.angle.unwrap_or(o.frame.angle) - angle, p).abs() <= crate::angle::tolerance(co, *angle, 0.0)
+                && crate::angle::wrap(crate::frame::within_a_turn(o.angle.unwrap_or(o.frame.angle)) - crate::frame::within_a_turn(*angle), p).abs()
+                    <= crate::angle::tolerance(co, *angle, 0.0)
         });
         if !ok {
             return broken("an angle mark names an object that does not have the angle", m);

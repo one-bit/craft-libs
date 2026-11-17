@@ -92,7 +92,7 @@ pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bo
         .iter()
         .filter_map(|c| tt.objects.get(c.index as usize).map(|o| (c.index, o)))
         .filter(|(_, o)| o.parts.spacing)
-        .filter(|(_, o)| !own || crate::angle::wrap(o.frame.angle - subject.angle, quarter).abs() <= cx.co.angle)
+        .filter(|(_, o)| !own || crate::angle::wrap(o.frame.turn() - subject.turn(), quarter).abs() <= cx.co.angle)
         .map(|(_, o)| {
             // A page row reads the box round an object's outline when there is one; an own row reads its own sides.
             let page = if own { None } else { o.bounds };

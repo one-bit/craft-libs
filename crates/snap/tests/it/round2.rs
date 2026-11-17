@@ -737,3 +737,31 @@ mod resize_roundings {
         assert!(changed > 40, "the roundings moved the results: only {changed} of 96 changed");
     }
 }
+
+mod own_rows_of_many_turns {
+    use super::*;
+
+    #[test]
+    fn objects_at_an_angle_of_many_turns_are_in_the_own_row_of_a_subject_at_what_it_has_left() {
+        let s = Settings::default();
+        for turns in [1.0e3, 1.0e9, 1.0e12, 1.0e15] {
+            let big = 0.3 + turns * std::f64::consts::TAU;
+            let left = big % std::f64::consts::TAU;
+            let u = kurbo::Vec2::new(left.cos(), left.sin());
+            let at = |along: f64| Point::new(0.0, 0.0) + u * along;
+            let result = |angle: f64| {
+                let objs = [(1, frame(at(0.0).x, at(0.0).y, 6.0, 4.0, angle)), (2, frame(at(30.0).x, at(30.0).y, 6.0, 4.0, angle))];
+                let t = scene(&objs, &[], &[]);
+                let q = query(box_subject(frame(at(14.4).x, at(14.4).y, 6.0, 4.0, left)), &s);
+                let out = run(&t, &q);
+                out.check(&t, &q).unwrap_or_else(|b| panic!("{turns:e}: {b:?}"));
+                out
+            };
+            let (reduced, unreduced) = (result(left), result(big));
+            assert_eq!(format!("{:?}", reduced.delta), format!("{:?}", unreduced.delta), "{turns:e}");
+            assert_eq!(format!("{:?}", reduced.marks), format!("{:?}", unreduced.marks), "{turns:e}");
+            // The row is there at all: a gap mark, with the subject centred between the two.
+            assert!(reduced.marks.iter().any(|m| matches!(m, craft_snap::Mark::Gap { .. })), "{turns:e}: {:?}", reduced.marks);
+        }
+    }
+}
