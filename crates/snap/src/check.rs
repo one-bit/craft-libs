@@ -533,10 +533,29 @@ fn gap_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(
     if !(co.same(tn.dot(segment.p1 - t.origin), across) && co.same(hi - lo, *value) && *value > 0.0) {
         return broken("a gap mark is not along its direction, or its length is not its value", m);
     }
-    let boxes = t.objects.iter().filter(|o| o.parts.spacing).map(|o| o.frame).chain(snapped.frame);
+    // A row along a page axis reads the box round an outline where the app gave one (the subject's moves with it); a row along a turned box's own
+    // axis reads the frames. Rows of each kind are the ones whose direction is a page axis or is not.
+    let page = {
+        let a = direction.angle();
+        a <= co.angle || (a - std::f64::consts::FRAC_PI_2).abs() <= co.angle || (a - std::f64::consts::PI).abs() <= co.angle
+    };
+    let reads = |f: &crate::frame::TurnedBox, bounds: Option<kurbo::Rect>| match bounds.filter(|_| page) {
+        Some(r) => crate::spacing::outline_extents(&r, n, t.origin),
+        None => (crate::spacing::extent(f, n, t.origin), crate::spacing::extent(f, tn, t.origin)),
+    };
+    let subject_box = snapped.frame.map(|f| {
+        let bounds = match q.subject {
+            Subject::Box { bounds: Some(b), frame: from, .. } | Subject::Nudge { bounds: Some(b), frame: from, .. } => {
+                Some(b + (f.centre - from.centre))
+            }
+            _ => None,
+        };
+        (f, bounds)
+    });
+    let boxes = t.objects.iter().filter(|o| o.parts.spacing).map(|o| (o.frame, o.bounds)).chain(subject_box);
     let (mut left, mut right) = (false, false);
-    for f in boxes {
-        let ((l, h), (c0, c1)) = (crate::spacing::extent(&f, n, t.origin), crate::spacing::extent(&f, tn, t.origin));
+    for (f, bounds) in boxes {
+        let ((l, h), (c0, c1)) = reads(&f, bounds);
         let covers = c0 <= across + co.tol(c0, across) && across <= c1 + co.tol(c1, across);
         left |= covers && co.same(h, lo);
         right |= covers && co.same(l, hi);

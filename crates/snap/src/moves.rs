@@ -181,7 +181,7 @@ fn choose(
 }
 
 /// The box the app gave for the subject's page directions, moved with the subject.
-fn subject_bounds(cx: &Ctx<'_>, frame: &TurnedBox) -> Option<kurbo::Rect> {
+pub(crate) fn subject_bounds(cx: &Ctx<'_>, frame: &TurnedBox) -> Option<kurbo::Rect> {
     match cx.q.subject {
         Subject::Box { bounds: Some(b), frame: f, .. } | Subject::Nudge { bounds: Some(b), frame: f, .. } => Some(b + (frame.centre - f.centre)),
         _ => None,

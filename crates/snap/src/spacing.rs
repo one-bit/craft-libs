@@ -41,7 +41,7 @@ pub(crate) fn extent(f: &TurnedBox, n: Vec2, origin: Point) -> (f64, f64) {
 }
 
 /// The extents of the box round an outline along a page axis `n` and across it, relative to `origin`.
-fn outline_extents(r: &kurbo::Rect, n: Vec2, origin: Point) -> ((f64, f64), (f64, f64)) {
+pub(crate) fn outline_extents(r: &kurbo::Rect, n: Vec2, origin: Point) -> ((f64, f64), (f64, f64)) {
     let (x, y) = ((r.x0 - origin.x, r.x1 - origin.x), (r.y0 - origin.y, r.y1 - origin.y));
     if n.x.abs() > 0.5 { (x, y) } else { (y, (-x.1, -x.0)) }
 }
@@ -58,7 +58,11 @@ pub(crate) struct Row {
 /// The row along `n` of the objects that overlap the subject across (the band), nearest the subject first, at most `row` of them.
 pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bool) -> Row {
     let t = Vec2::new(-n.y, n.x);
-    let ((lo, hi), (c0, c1)) = (extent(subject, n, cx.o), extent(subject, t, cx.o));
+    // A page row reads the box round the subject's outline when the app gave one, as it does for the objects; an own row reads its own sides.
+    let ((lo, hi), (c0, c1)) = match if own { None } else { crate::moves::subject_bounds(cx, subject) } {
+        Some(r) => outline_extents(&r, n, cx.o),
+        None => (extent(subject, n, cx.o), extent(subject, t, cx.o)),
+    };
     let r = cx.s.spacing_reach;
     let reach = (r.times * (hi - lo)).max(r.at_least);
     // A linked row follows a staircase out across the subject's strip, so its window is as wide across as it is along.

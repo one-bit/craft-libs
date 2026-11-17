@@ -229,3 +229,49 @@ proptest! {
         prop_assert_eq!(plain.delta, out.delta);
     }
 }
+
+fn margins() -> impl Strategy<Value = Option<(f64, f64, f64, f64)>> {
+    prop_oneof![1 => Just(None), 2 => (-0.5f64..2.0, -0.5f64..2.0, -0.5f64..2.0, -0.5f64..2.0).prop_map(Some)]
+}
+
+/// The box an app could give round an outline: the frame's own, moved out (or in) by the margins.
+fn path_box(f: craft_snap::TurnedBox, m: Option<(f64, f64, f64, f64)>) -> Option<kurbo::Rect> {
+    m.map(|(a, b, c, d)| {
+        let r = f.bounds();
+        kurbo::Rect::new(r.x0 - a, r.y0 - b, r.x1 + c, r.y1 + d)
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1500))]
+
+    /// The coincidence scenes again with the box the app gives round an outline on objects and on the subject: the rows are read from it, and so is the check.
+    #[test]
+    fn what_is_drawn_is_where_it_lands_among_boxes_with_a_path_box_of_their_own(
+        objects in prop::collection::vec((grid_frame(), margins()), 1..12),
+        sub in grid_frame(),
+        sub_margins in margins(),
+        jitter in (-3.0f64..3.0, -3.0f64..3.0),
+        s in settings(),
+        c in prop_oneof![3 => Just(Constraint::None), 1 => Just(Constraint::Axis(Axis::X)), 1 => Just(Constraint::Axis(Axis::Y))],
+        r in rounding(),
+    ) {
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        for (i, (o, m)) in objects.iter().enumerate() {
+            let f = frame(o.0, o.1, o.2, o.3, o.4);
+            b.object(craft_snap::Id(i as u64), craft_snap::Object { bounds: path_box(f, *m), ..object(f) }).unwrap();
+        }
+        let t = b.build();
+        let s = Settings { spacing_reach: craft_snap::SpacingReach { times: 4.0, at_least: 100.0 }, ..s };
+        let f = frame(sub.0 + jitter.0, sub.1 + jitter.1, sub.2, sub.3, sub.4);
+        let q = craft_snap::Query {
+            constraint: c,
+            rounding: r,
+            ..query(Subject::Box { frame: f, bounds: path_box(f, sub_margins), u: Anchors::ALL, v: Anchors::ALL, own: &[] }, &s)
+        };
+        let out = run(&t, &q);
+        if let Err(b) = out.check(&t, &q) {
+            prop_assert!(false, "{:?}\nresult: {:?}", b, out);
+        }
+    }
+}

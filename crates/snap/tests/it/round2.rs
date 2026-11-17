@@ -340,3 +340,94 @@ mod numbers_too_big_for_a_place {
         }
     }
 }
+
+mod gaps_of_path_boxes {
+    use craft_snap::{Anchors, Id, Limits, Mark, Object, Parts, TargetsBuilder, TurnedBox};
+    use kurbo::Rect;
+
+    use super::*;
+
+    fn with_bounds(f: TurnedBox, r: Rect) -> Object {
+        Object { frame: f, bounds: Some(r), angle: None, parts: Parts::ALL }
+    }
+
+    fn row(objects: &[(u64, Object)]) -> craft_snap::Targets {
+        let mut b = TargetsBuilder::new(Limits::default());
+        for (id, o) in objects {
+            b.object(Id(*id), *o).unwrap();
+        }
+        b.build()
+    }
+
+    /// Settings with the snaps to places off, so a drop among boxes is left to their gaps and lines.
+    fn no_places() -> Settings {
+        let mut s = Settings::default();
+        for k in [Kind::Corner, Kind::SideMiddle, Kind::Vertex, Kind::Midpoint, Kind::Nearest, Kind::Intersection] {
+            let mut r = s.kinds.rule(k);
+            r.on = false;
+            s.kinds.set(k, r);
+        }
+        s
+    }
+
+    fn gaps(out: &craft_snap::Snapped) -> usize {
+        out.marks.iter().filter(|m| matches!(m, Mark::Gap { .. })).count()
+    }
+
+    #[test]
+    fn a_subject_between_two_turned_objects_with_path_boxes_has_gaps_that_pass_the_check() {
+        let s = no_places();
+        let bx = |x: f64| Rect::new(x - 1.5, -1.5, x + 1.5, 1.5);
+        let t = row(&[(1, with_bounds(frame(0.0, 0.0, 4.0, 2.0, 0.5), bx(0.0))), (2, with_bounds(frame(10.0, 0.0, 4.0, 2.0, 0.5), bx(10.0)))]);
+        for x in [4.9, 5.0, 5.2, 5.4] {
+            let q = query(box_subject(frame(x, 0.0, 3.0, 3.0, 0.0)), &s);
+            let out = run(&t, &q);
+            out.check(&t, &q).unwrap_or_else(|b| panic!("{x}: {b:?}"));
+        }
+        // Dropped near the middle, it goes to the middle of the room between the path boxes (1.5 to 8.5, 7 of it, 3 taken by the subject): gaps of 2 each.
+        let q = query(box_subject(frame(5.2, 0.0, 3.0, 3.0, 0.0)), &s);
+        let out = run(&t, &q);
+        assert!(gaps(&out) >= 2, "{out:?}");
+        assert!((out.delta.x + 0.2).abs() < 1e-9, "{:?}", out.delta);
+        for m in &out.marks {
+            if let Mark::Gap { value, .. } = m {
+                assert!((value - 2.0).abs() < 1e-9, "{m:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_subject_with_a_path_box_of_its_own_has_its_gaps_read_from_it() {
+        let s = no_places();
+        let bx = |x: f64| Rect::new(x - 1.5, -1.5, x + 1.5, 1.5);
+        let t = row(&[(1, with_bounds(frame(0.0, 0.0, 4.0, 2.0, 0.0), bx(0.0))), (2, with_bounds(frame(12.0, 0.0, 4.0, 2.0, 0.0), bx(12.0)))]);
+        let f = frame(6.3, 0.0, 3.0, 3.0, 0.0);
+        // The subject's frame is 3 wide and its path box 5: the gap to either neighbour is read from the path box.
+        let subject = |bounds: Option<Rect>| Subject::Box { frame: f, bounds, u: Anchors::ALL, v: Anchors::ALL, own: &[] };
+        let wide = Some(Rect::new(6.3 - 2.5, -1.5, 6.3 + 2.5, 1.5));
+        let q = query(subject(wide), &s);
+        let out = run(&t, &q);
+        out.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{out:?}"));
+        let q = query(subject(None), &s);
+        let plain = run(&t, &q);
+        plain.check(&t, &q).unwrap();
+        // The path boxes' edges are at 1.5 and 10.5, 9 of room: gaps of 2 around a 5 wide subject, of 3 around a 3 wide one.
+        let wide_gap = out.marks.iter().find_map(|m| if let Mark::Gap { value, subject: true, .. } = m { Some(*value) } else { None });
+        let plain_gap = plain.marks.iter().find_map(|m| if let Mark::Gap { value, subject: true, .. } = m { Some(*value) } else { None });
+        assert!(wide_gap.is_some_and(|g| (g - 2.0).abs() < 1e-9), "{wide_gap:?} {out:?}");
+        assert!(plain_gap.is_some_and(|g| (g - 3.0).abs() < 1e-9), "{plain_gap:?} {plain:?}");
+    }
+
+    #[test]
+    fn bounds_that_are_not_numbers_are_left_out_of_a_row_and_its_check() {
+        let s = no_places();
+        let bad = Rect::new(f64::NAN, -1.5, 3.0, 1.5);
+        let t = row(&[(1, with_bounds(frame(0.0, 0.0, 4.0, 2.0, 0.0), bad)), (2, with_bounds(frame(12.0, 0.0, 4.0, 2.0, 0.0), bad))]);
+        let q = query(box_subject(frame(6.3, 0.0, 3.0, 3.0, 0.0)), &s);
+        let out = run(&t, &q);
+        out.check(&t, &q).unwrap();
+        // With the frames: edges at 2 and 10, 8 of room, 3 taken: a gap of 2.5 on either side.
+        let g = out.marks.iter().find_map(|m| if let Mark::Gap { value, subject: true, .. } = m { Some(*value) } else { None });
+        assert!(g.is_some_and(|g| (g - 2.5).abs() < 1e-9), "{g:?} {out:?}");
+    }
+}
