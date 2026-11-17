@@ -15,8 +15,8 @@ fn object_frame() -> impl Strategy<Value = (f64, f64, f64, f64, f64)> {
 }
 
 fn settings() -> impl Strategy<Value = Settings> {
-    (any::<bool>(), 0u8..3, any::<bool>(), any::<bool>(), any::<bool>(), prop_oneof![Just(None), (5.0f64..80.0).prop_map(Some)]).prop_map(
-        |(ranked, matching, page, own, nearest, reach)| Settings {
+    (any::<bool>(), 0u8..3, any::<bool>(), any::<bool>(), any::<bool>(), prop_oneof![Just(None), (5.0f64..80.0).prop_map(Some)], 0u8..3).prop_map(
+        |(ranked, matching, page, own, nearest, reach, row)| Settings {
             align_reach: reach.map(craft_snap::Reach::Document),
             choose: if ranked { Choose::Ranked } else { Choose::Nearest },
             matching: match matching {
@@ -26,7 +26,11 @@ fn settings() -> impl Strategy<Value = Settings> {
             },
             frames: Frames { page: page || !own, own },
             line_span: if nearest { craft_snap::LineSpan::Nearest } else { craft_snap::LineSpan::Every },
-            spacing_row: if nearest { craft_snap::SpacingRow::Linked } else { craft_snap::SpacingRow::Band },
+            spacing_row: match row {
+                0 => craft_snap::SpacingRow::Band,
+                1 => craft_snap::SpacingRow::Linked,
+                _ => craft_snap::SpacingRow::Beyond,
+            },
             ..Settings::default()
         },
     )

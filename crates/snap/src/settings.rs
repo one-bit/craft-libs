@@ -52,6 +52,13 @@ pub enum SpacingRow {
     Band,
     /// From each neighbour outward, the next object that overlaps the previous one across.
     Linked,
+    /// The rule of an app that reads equal gaps from a strip, exactly: the objects that meet a strip as wide across as the subject; the neighbour on
+    /// each side (the nearest object wholly before, or wholly after, the subject that overlaps the subject across); and the nearest object wholly beyond
+    /// that neighbour (wholly before or after it along the row) that overlaps the neighbour across; and nothing else. An object that overlaps the
+    /// neighbour along the row is not beyond it, and a staircase of objects that do not overlap the subject is not a row. Meant with
+    /// [`SpacingGaps::Neighbour`]: the places are the middle between the two neighbours and each neighbour's gap to its beyond object. An object that touches the neighbour is
+    /// no gap to repeat (a gap of nothing is not drawn), and a place that would not hold where it lands is dropped, as for every row.
+    Beyond,
 }
 
 /// Which gaps of the row the subject's gap may repeat (besides the centred place between its two neighbours).

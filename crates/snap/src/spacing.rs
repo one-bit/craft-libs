@@ -115,6 +115,7 @@ pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bo
         // An object that only touches the subject's band across (a snap to its edge puts it there) is not in the row, whatever the last bits say.
         SpacingRow::Band => objs.into_iter().filter(|o| overlaps_across(&cx.co, (c0, c1), o)).collect(),
         SpacingRow::Linked => linked(cx, objs, (lo, hi), (c0, c1)),
+        SpacingRow::Beyond => beyond(cx, objs, (lo, hi), (c0, c1)),
     };
     Row { objs, lo, hi, c0, c1 }
 }
@@ -122,6 +123,38 @@ pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bo
 /// Whether an object overlaps the band `a` across the row by more than the same-place rule can tell from touching.
 fn overlaps_across(co: &crate::frame::Coincide, a: (f64, f64), o: &RowObj) -> bool {
     o.c0 < a.1 - co.tol(o.c0, a.1) && a.0 + co.tol(a.0, o.c1) < o.c1
+}
+
+/// A beyond row: the neighbour on each side, and the nearest object wholly beyond it, and nothing else. The neighbour is the nearest object wholly
+/// before (after) the subject that overlaps the subject's band across; what is beyond it is the nearest object wholly before (after) the neighbour
+/// that overlaps the neighbour's band across. All are taken from the objects that meet the strip as wide across as the subject.
+fn beyond(cx: &Ctx<'_>, objs: Vec<RowObj>, (lo, hi): (f64, f64), across: (f64, f64)) -> Vec<RowObj> {
+    let co = cx.co;
+    // Nearest first, a tie to the lower id: the order `starts` reads a neighbour in.
+    let nearer_before = |x: &&RowObj, y: &&RowObj| x.hi.total_cmp(&y.hi).then(y.id.cmp(&x.id));
+    let nearer_after = |x: &&RowObj, y: &&RowObj| x.lo.total_cmp(&y.lo).then(x.id.cmp(&y.id));
+    let before = objs.iter().filter(|o| o.hi <= lo + co.tol(o.hi, lo) && overlaps_across(&co, across, o)).max_by(nearer_before).copied();
+    let after = objs.iter().filter(|o| o.lo >= hi - co.tol(o.lo, hi) && overlaps_across(&co, across, o)).min_by(nearer_after).copied();
+    let mut out = Vec::new();
+    if let Some(n) = before {
+        out.push(n);
+        let next = objs
+            .iter()
+            .filter(|o| o.id != n.id && overlaps_across(&co, (n.c0, n.c1), o) && o.hi <= n.lo + co.tol(o.hi, n.lo))
+            .max_by(nearer_before)
+            .copied();
+        out.extend(next);
+    }
+    if let Some(n) = after {
+        out.push(n);
+        let next = objs
+            .iter()
+            .filter(|o| o.id != n.id && overlaps_across(&co, (n.c0, n.c1), o) && o.lo >= n.hi - co.tol(o.lo, n.hi))
+            .min_by(nearer_after)
+            .copied();
+        out.extend(next);
+    }
+    out
 }
 
 /// A linked row: from each neighbour outward, the next object that overlaps the previous one across, so a staircase of objects is a row.

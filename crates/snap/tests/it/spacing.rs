@@ -517,3 +517,200 @@ fn a_chained_row_reads_the_boxes_after_the_subject_wherever_the_origin_of_the_ta
     // The gap of 3 between the last two repeats before them: the box's high side lands 3 before the first of them, at 57.
     assert!(r.hits.iter().any(|h| h.kind == Kind::Spacing) && (r.frame.unwrap().centre.x - 52.0).abs() < 1e-9, "{:?} {:?}", r.hits, r.frame);
 }
+
+/// The row of an app that reads equal gaps from a strip (`SpacingRow::Beyond`): the neighbour on each side and the nearest object wholly beyond it.
+mod beyond {
+    use craft_snap::{Axis, Constraint, Id, Reach, SpacingGaps, SpacingRow, TurnedBox};
+    use kurbo::Rect;
+
+    use super::*;
+
+    /// Settings with only equal gaps on, along a row, in inches at 96 to the inch: a gap pulls from 6 screen units, the neighbours of a gap may be four
+    /// lengths off (or four inches), and a neighbour's gap to what is beyond it is the only gap repeated.
+    fn settings(row: SpacingRow) -> Settings {
+        let mut s = Settings {
+            spacing_row: row,
+            spacing_gaps: SpacingGaps::Neighbour,
+            spacing_reach: SpacingReach { times: 4.0, at_least: 4.0 },
+            ..Settings::default()
+        };
+        for k in [
+            Kind::Corner,
+            Kind::SideMiddle,
+            Kind::Edge,
+            Kind::Centre,
+            Kind::Size,
+            Kind::Vertex,
+            Kind::Midpoint,
+            Kind::Nearest,
+            Kind::Intersection,
+            Kind::Guide,
+            Kind::Grid,
+        ] {
+            s.kinds.set(k, craft_snap::KindRule { on: false, reach: Reach::Screen(6.0), priority: 1, scope: craft_snap::Scope::All });
+        }
+        s.kinds.set(Kind::Spacing, craft_snap::KindRule { on: true, reach: Reach::Screen(6.0), priority: 6, scope: craft_snap::Scope::All });
+        s
+    }
+
+    /// A box from its sides: x0, y0, x1, y1.
+    fn bx(x0: f64, y0: f64, x1: f64, y1: f64) -> TurnedBox {
+        frame(0.5 * (x0 + x1), 0.5 * (y0 + y1), x1 - x0, y1 - y0, 0.0)
+    }
+
+    /// Where a subject lands along x among these boxes (the first is object 1), and what it hit.
+    fn along_x(boxes: &[TurnedBox], subject: TurnedBox, row: SpacingRow) -> craft_snap::Snapped {
+        let objs: Vec<(u64, TurnedBox)> = boxes.iter().enumerate().map(|(i, b)| (i as u64 + 1, *b)).collect();
+        let t = scene(&objs, &[], &[]);
+        let s = settings(row);
+        let q = craft_snap::Query { zoom: 96.0, constraint: Constraint::Axis(Axis::X), ..query(box_subject(subject), &s) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+        r
+    }
+
+    fn spacing_hit(r: &craft_snap::Snapped) -> Option<Id> {
+        r.hits.iter().find(|h| h.kind == Kind::Spacing).and_then(|h| h.id)
+    }
+
+    #[test]
+    fn a_staircase_that_misses_the_subjects_strip_is_not_a_row() {
+        // The subject x 4.05 to 5.05, y 0 to 1. L (id 1) overlaps it across; B (id 2) overlaps L across and misses the subject's strip. The gap L to B is 1
+        // and the subject's to L 1.05.
+        let boxes = [bx(2.0, 0.5, 3.0, 1.5), bx(0.0, 1.2, 1.0, 2.2)];
+        let subject = bx(4.05, 0.0, 5.05, 1.0);
+        let beyond = along_x(&boxes, subject, SpacingRow::Beyond);
+        assert_eq!(beyond.delta.x, 0.0, "{:?}", beyond.hits);
+        assert_eq!(spacing_hit(&beyond), None);
+        assert_eq!(along_x(&boxes, subject, SpacingRow::Band).delta.x, 0.0);
+        // Linked follows the staircase out across the strip and finds it.
+        let linked = along_x(&boxes, subject, SpacingRow::Linked);
+        assert!((linked.delta.x + 0.05).abs() < 1e-9 && spacing_hit(&linked) == Some(Id(1)), "{:?} {:?}", linked.delta, linked.hits);
+    }
+
+    #[test]
+    fn the_object_wholly_beyond_the_neighbour_is_the_gap_repeated_and_the_next_one_is_not_looked_at() {
+        // Low side: the neighbour L (id 1) x 2.5 to 3.5 is 0.5 from the subject (x 4 to 5); Bl (id 2) is wholly before L, 0.55 from it; one more (id 3) is
+        // 0.95 before that. The subject repeats L's gap to Bl: it moves 0.05 away.
+        let boxes = [bx(2.5, 0.0, 3.5, 1.0), bx(0.95, 0.0, 1.95, 1.0), bx(-1.0, 0.0, 0.0, 1.0)];
+        let r = along_x(&boxes, bx(4.0, 0.0, 5.0, 1.0), SpacingRow::Beyond);
+        assert!((r.delta.x - 0.05).abs() < 1e-9 && spacing_hit(&r) == Some(Id(1)), "{:?} {:?}", r.delta, r.hits);
+        assert!(
+            r.marks.iter().any(|m| matches!(m, Mark::Gap { value, subject: true, hit: true, .. } if (value - 0.55).abs() < 1e-9)),
+            "{:?}",
+            r.marks
+        );
+        // The same on the high side: the neighbour H (id 1) x 5.5 to 6.5 is 0.5 from the subject; the object wholly after it (id 2) is 0.45 from it.
+        let boxes = [bx(5.5, 0.0, 6.5, 1.0), bx(6.95, 0.0, 7.95, 1.0), bx(9.0, 0.0, 10.0, 1.0)];
+        let r = along_x(&boxes, bx(4.0, 0.0, 5.0, 1.0), SpacingRow::Beyond);
+        assert!((r.delta.x - 0.05).abs() < 1e-9 && spacing_hit(&r) == Some(Id(1)), "{:?} {:?}", r.delta, r.hits);
+        // The middle between the two neighbours, as ever: 0.5 from one and 0.4 from the other, the subject goes 0.05 towards the nearer.
+        let boxes = [bx(2.5, 0.0, 3.5, 1.0), bx(5.4, 0.0, 6.4, 1.0)];
+        let r = along_x(&boxes, bx(4.0, 0.0, 5.0, 1.0), SpacingRow::Beyond);
+        assert!((r.delta.x + 0.05).abs() < 1e-9, "{:?} {:?}", r.delta, r.hits);
+    }
+
+    #[test]
+    fn an_object_that_overlaps_the_neighbour_along_the_row_is_not_beyond_it_and_is_not_stepped_onto() {
+        // Low side, from a real case: the subject x 5.159 to 6.911, y 0 to 1; #3 (id 1) is its neighbour; #4 (id 2) overlaps #3 along the row and #3's band;
+        // #5 (id 3) overlaps #4's band but not #3's. Nothing is wholly beyond #3 that overlaps it across: no gap to repeat.
+        let boxes = [bx(3.277, 0.082, 4.726, 0.811), bx(2.181, 0.536, 3.524, 1.027), bx(2.488, 0.875, 2.836, 1.709)];
+        let subject = bx(5.159, 0.0, 6.911, 1.0);
+        let beyond = along_x(&boxes, subject, SpacingRow::Beyond);
+        assert_eq!((beyond.delta.x, spacing_hit(&beyond)), (0.0, None), "{:?}", beyond.hits);
+        // Linked steps onto #4 and joins #5 to #3 across it: a hit of 0.0082 that Beyond does not make.
+        let linked = along_x(&boxes, subject, SpacingRow::Linked);
+        assert!(spacing_hit(&linked).is_some() && linked.delta.x != 0.0, "{:?} {:?}", linked.delta, linked.hits);
+        // The other way: the neighbour H (id 1, x 9.5 to 10.5, 0.5 from the subject) has a box wholly beyond it (id 3, x 10.95 to 11.95) that overlaps its
+        // band, and one that overlaps it along the row (id 2, x 9.8 to 10.1) and sits above the beyond box's band. Linked steps onto the second and loses
+        // the third; Beyond skips the second and finds the third: the gap 0.45 against the subject's 0.5, a move of 0.05.
+        let boxes = [bx(9.5, 0.0, 10.5, 1.0), bx(9.8, 0.8, 10.1, 1.6), bx(10.95, 0.0, 11.95, 0.4)];
+        let subject = bx(8.0, 0.0, 9.0, 1.0);
+        let beyond = along_x(&boxes, subject, SpacingRow::Beyond);
+        assert!((beyond.delta.x - 0.05).abs() < 1e-9 && spacing_hit(&beyond) == Some(Id(1)), "{:?} {:?}", beyond.delta, beyond.hits);
+        let linked = along_x(&boxes, subject, SpacingRow::Linked);
+        assert_eq!(spacing_hit(&linked), None, "{:?}", linked.hits);
+    }
+
+    #[test]
+    fn an_object_touching_the_neighbour_is_no_gap_to_repeat() {
+        // A gap of nothing is not a gap (it is not drawn, and a hit with no mark is not made): the neighbour's edge is still met by the alignment of sides.
+        let boxes = [bx(2.5, 0.0, 3.5, 1.0), bx(1.5, 0.0, 2.5, 1.0)];
+        let r = along_x(&boxes, bx(4.0, 0.0, 5.0, 1.0), SpacingRow::Beyond);
+        assert_eq!((r.delta.x, spacing_hit(&r)), (0.0, None), "{:?}", r.hits);
+    }
+
+    /// The moves of the subject, along x, that the rule asks for (the middle between the neighbours, and each neighbour's gap repeated to the object
+    /// wholly beyond it), written out over the boxes that meet the strip as wide across as the subject and four lengths (or four inches) along.
+    fn asked(boxes: &[Rect], subject: Rect) -> Vec<f64> {
+        let overlaps = |a: (f64, f64), b: (f64, f64)| a.0 < b.1 && b.0 < a.1;
+        let reach = (4.0 * subject.width()).max(4.0);
+        let window = Rect::new(subject.x0 - reach, subject.y0, subject.x1 + reach, subject.y1);
+        let meets = |r: &Rect| r.x0 <= window.x1 && window.x0 <= r.x1 && r.y0 <= window.y1 && window.y0 <= r.y1;
+        let gathered: Vec<(usize, Rect)> = boxes.iter().copied().enumerate().filter(|(_, r)| meets(r)).collect();
+        let across = (subject.y0, subject.y1);
+        let beside: Vec<&(usize, Rect)> = gathered.iter().filter(|(_, r)| overlaps((r.y0, r.y1), across)).collect();
+        let low = beside.iter().filter(|(_, r)| r.x1 <= subject.x0).max_by(|a, b| a.1.x1.total_cmp(&b.1.x1));
+        let high = beside.iter().filter(|(_, r)| r.x0 >= subject.x1).min_by(|a, b| a.1.x0.total_cmp(&b.1.x0));
+        let mut moves: Vec<f64> = Vec::new();
+        if let (Some((_, l)), Some((_, h))) = (low, high) {
+            moves.push(((h.x0 - subject.x1) - (subject.x0 - l.x1)) / 2.0);
+        }
+        if let Some((i, l)) = low {
+            let gl = subject.x0 - l.x1;
+            let b = gathered
+                .iter()
+                .filter(|(j, r)| j != i && overlaps((r.y0, r.y1), (l.y0, l.y1)) && r.x1 <= l.x0)
+                .max_by(|a, b| a.1.x1.total_cmp(&b.1.x1));
+            if let Some((_, b)) = b {
+                moves.push((l.x0 - b.x1) - gl);
+            }
+        }
+        if let Some((i, h)) = high {
+            let gh = h.x0 - subject.x1;
+            let b = gathered
+                .iter()
+                .filter(|(j, r)| j != i && overlaps((r.y0, r.y1), (h.y0, h.y1)) && r.x0 >= h.x1)
+                .min_by(|a, b| a.1.x0.total_cmp(&b.1.x0));
+            if let Some((_, b)) = b {
+                moves.push(gh - (b.x0 - h.x1));
+            }
+        }
+        moves
+    }
+
+    /// Where the rule lands the subject: the nearest of the moves it asks within the pull, that still asks for itself where it lands (the neighbours
+    /// are read again there, as the crate does for every snap, so that what it draws is true).
+    fn expected(boxes: &[Rect], subject: Rect, zoom: f64) -> f64 {
+        let pull = 6.0 / zoom;
+        let mut moves: Vec<f64> = asked(boxes, subject).into_iter().filter(|m| m.abs() <= pull).collect();
+        moves.sort_by(|a, b| a.abs().total_cmp(&b.abs()));
+        let moved = |m: f64| Rect::new(subject.x0 + m, subject.y0, subject.x1 + m, subject.y1);
+        moves.into_iter().find(|m| asked(boxes, moved(*m)).iter().any(|k| k.abs() < 1e-9)).unwrap_or(0.0)
+    }
+
+    use proptest::prelude::*;
+
+    fn rect() -> impl Strategy<Value = Rect> {
+        (0.0f64..14.0, -0.5f64..2.0, 0.3f64..2.0, 0.2f64..1.6).prop_map(|(x, y, w, h)| Rect::new(x, y, x + w, y + h))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4000))]
+
+        /// The row of this mode lands the subject where the rule written out above does, over boxes of every kind of overlap across and along.
+        #[test]
+        fn the_beyond_row_lands_where_the_rule_written_out_does(
+            boxes in prop::collection::vec(rect(), 0..8),
+            subject in (6.0f64..9.0, 0.0f64..0.5, 0.5f64..2.0, 0.5f64..1.5).prop_map(|(x, y, w, h)| Rect::new(x, y, x + w, y + h)),
+            nudge in prop::sample::select(vec![0.0f64, 0.02, -0.02, 0.05]),
+        ) {
+            // Where a pull is within reach of the subject some of the time: the subject is also put a little off the middle of its neighbours.
+            let subject = Rect::new(subject.x0 + nudge, subject.y0, subject.x1 + nudge, subject.y1);
+            let frames: Vec<TurnedBox> = boxes.iter().map(|r| bx(r.x0, r.y0, r.x1, r.y1)).collect();
+            let r = along_x(&frames, bx(subject.x0, subject.y0, subject.x1, subject.y1), SpacingRow::Beyond);
+            let want = expected(&boxes, subject, 96.0);
+            prop_assert!((r.delta.x - want).abs() < 1e-9, "want {want}, got {:?} {:?}", r.delta, r.hits);
+        }
+    }
+}

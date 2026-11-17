@@ -15,7 +15,7 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
   along each shape's own axes as well as the page's. A shape a whole number of quarter turns from the page is the page's own case, stored once.
 - **Policy is data.** `Settings` holds, per kind, whether it is on, how far it pulls (`Reach::Screen`, `Document` or `Any`), its priority and
   its scope; the tie rule (`Choose::Nearest` or `Ranked`); how places compete with lines; which sides meet which lines (`Matching::AnyToAny`,
-  `LikeToLike`, `SameSide`); the families of lines; spacing rows (`Band`, or `Linked`: a staircase of objects is a row) and gaps; size axes; the angle period; how far a line mark runs
+  `LikeToLike`, `SameSide`); the families of lines; spacing rows (`Band`; `Linked`, where a staircase of objects is a row; or `Beyond`, the rule of an app that reads a strip: the neighbour on each side and the nearest object wholly beyond it, and nothing else) and gaps; size axes; the angle period; how far a line mark runs
   (`LineSpan::Every` or `Nearest`); and what counts as the same place (`Coincide`, which `Coincide::at(far)` widens by what a coordinate as large as
   `far` cannot say; a query does that itself for the largest coordinate of its subject and of the result).
 - **Constraints and rounding are solved inside the snap.** An axis lock, a ray, a kept aspect ratio (from a corner or a side handle), sides that
@@ -84,7 +84,9 @@ with another gets no rotation match, and its work says `truncated` with the `ANG
 - **Only the nearest line of each kind and side is a candidate.** If a verification (a resize that would leave no box, a row that changed) drops it,
   the next nearest line of the same kind is not tried. The result always satisfies `Snapped::check`; it is not always the best one there was.
 - **Row neighbours are read from a strip.** An equal gap is searched among the objects that meet the strip `spacing_reach` long along the row, and
-  only the objects that overlap the subject across it by more than the same-place rule (or, linked, are chained to those that do).
+  only the objects that overlap the subject across it by more than the same-place rule (or, linked, are chained to those that do; or, `Beyond`, the
+  neighbour on each side and the nearest object wholly beyond it that overlaps it across). `Beyond` does not step onto an object that overlaps the
+  neighbour along the row, and an object that touches the neighbour is no gap to repeat (a gap of nothing is not drawn).
 - **Far from the origin a place is coarser.** The same-place rule grows by a few units in the last place of the largest coordinate in the query, so a
   result is not called off its line for the rounding of its own coordinates; two candidates that are closer than that at 1e11 are told apart by
   the rule, not by their distance.
