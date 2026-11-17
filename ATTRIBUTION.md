@@ -132,3 +132,22 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## JSONC span-preserving editing
 
 `crates/jsonc` is extracted from Craft Anything `crates/formats/src/jsonc.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). The original implementation and hardening by BFlat, newline preservation by NetterSilver, and subsequent RRFZ/Afloat correctness fixes retain separate primary-author port commits with immutable source revisions. Shared API wiring and optional input-byte admission are subsequent changes. Compatibility parsing and all existing formatting/editing tests are retained; application file I/O and policy are not imported.
+
+## Snapping and smart guides
+
+`crates/snap` (craft-snap) carries code and tests ported from the Craft apps below, each at the commit named (all MIT OR Apache-2.0). A ported file says where it came from on its first lines. The README has the same table and, for each source, what differs.
+
+| Crate code | Source | Commit | What came over |
+|---|---|---|---|
+| `osnap` | CADCraft `crates/engine/src/snap.rs`, `crates/engine/src/snap/curves.rs` | `ba3196e3f737f2fed0d4d8ae9c065b20773dec16` | Endpoint, midpoint by arc length, intersection near the aperture, nearest, tangent and perpendicular by sampled roots, the 15% score. Moved onto kurbo `BezPath`, read about a local origin, and bounded |
+| `labels` | FigCraft `crates/ui-egui/src/canvas/measure_overlay.rs` (`place_labels`) | `4548d6c00953dd051ee36af3bada376d1a80d05c` | The order of label spots. Moved from egui types to kurbo, and bounded |
+| `spacing` (the three equal-gap cases) | FigCraft `crates/engine/src/canvas/snap.rs` (`spacings`) | the same | Centred between neighbours, and the gap repeated on either side |
+| `spacing` (gap pairs and chains) | VectorCraft `crates/tools/src/guides/targets.rs` (`even_spacing`, `gap_marks`) | `9a01d266b0438f96608c9f75b51437f912587d22` | Each object paired with the next by bisection, any gap in the row repeated, every equal pair marked |
+| `index` (sorted lines) | VectorCraft, the same file | the same | Sorted arrays searched by bisection, and the test that bisection equals a scan |
+| `solve` (resize in a turned frame) | VectorCraft, the same file (`snap_scale`) | the same | One parameter per dragged side or proportional corner; the handle and its side's ends as the points that meet lines; a travel limit; collapse and flip refused |
+| `size`, `angle`, request flags | DesignCraft `crates/tools/src/snap.rs` (`pass_dimensions`, `length_edge_delta`, `match_rotation`) | `47ef1ec411d53e98a31c576d80a1d0e20ef5eb04` | Other objects' own side lengths; the length difference applied at the moving side (split when both move); rotation match within `atan(zone / radius)`; per-axis `[min, mid, max]` flags |
+| `solve` (axis-locked snapping, ties) | EffectCraft `crates/engine/src/viewer.rs` (`snap_along`, `better`, `POINT_BIAS`) | `60e2cbbbe3d73c0a9074c25a1a615ccfec18721c` | A place as a line across a locked drag; priority only on ties; the place's bias against a pair of lines |
+| `targets` (shape of the set) | PhotoCraft `crates/engine/src/snap.rs` (`SnapTargets`) | `957b10cccbb4bcd402394d250e52a9b9e1b63d74` | A plain target set built at the press, a span on every target, every side exactly on a target reported |
+| `index` (scan fallback test) | PDFCraft `crates/measure/src/snap.rs` | `efd265563edfe1b5a3261b184fbc4c83f67f4364` | A uniform grid with a list of wide entries, tested equal to a full scan |
+
+The bucket index, the budgets, the kind table and its two choosing rules, the zoom-following grid pitch helpers, the directions and the pairing of up to four of them, the constraint solver, and the marks pass and its check are written for the crate, with their tests.

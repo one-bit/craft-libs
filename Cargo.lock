@@ -3050,6 +3050,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-snap"
+version = "0.1.0"
+dependencies = [
+ "kurbo 0.13.1",
+ "proptest",
+]
+
+[[package]]
 name = "craft-sniff"
 version = "0.1.0"
 
