@@ -476,11 +476,38 @@ fn applied(degs: &[Degree], own: &Own, values: &[f64]) -> Ext {
     degs.iter().zip(values).fold(own.ext, |e, (d, g)| d.kind.apply(e, *g))
 }
 
+/// The extents of a dragged box brought to a width over height of `ratio`: the smallest box of that ratio that holds the dragged one, the fixed sides
+/// staying (about the fixed corner or side), or the middle staying (about the centre, or on an axis whose sides do not move or both move).
+fn conformed(e: Ext, ratio: f64, moving: &Edges, about: About) -> Ext {
+    let (w, h) = (e.a1 - e.a0, e.b1 - e.b0);
+    if [moving.u_min, moving.u_max, moving.v_min, moving.v_max].iter().all(|m| !m) {
+        return e;
+    }
+    // (A ratio that is not above 0 or not finite is refused before this.)
+    let h2 = h.max(w / ratio);
+    let w2 = ratio * h2;
+    // Where an axis of the new length sits: one end stays when only the other moves and the box is held about its fixed side.
+    let place = |lo: f64, hi: f64, len: f64, low_moves: bool, high_moves: bool| match (about, low_moves, high_moves) {
+        (About::Fixed, true, false) => (hi - len, hi),
+        (About::Fixed, false, true) => (lo, lo + len),
+        _ => {
+            let mid = 0.5 * (lo + hi);
+            (mid - 0.5 * len, mid + 0.5 * len)
+        }
+    };
+    let (a0, a1) = place(e.a0, e.a1, w2, moving.u_min, moving.u_max);
+    let (b0, b1) = place(e.b0, e.b1, h2, moving.v_min, moving.v_max);
+    Ext { a0, a1, b0, b1 }
+}
+
 /// Resizes a box: its moving sides along its own axes. Each degree takes its best candidate; a candidate that does not hold on the final
 /// extents (a corner two moving sides share) is dropped and the degree's next is tried, so that what is drawn is where the box lands.
 pub(crate) fn solve_edges(cx: &mut Ctx<'_>, _detail: &mut dyn Detail, frame: TurnedBox, moving: Edges) -> Solution {
     cx.region = cx.t.rel_bounds(&frame);
-    let own = Own::of(&frame, cx.o);
+    let mut own = Own::of(&frame, cx.o);
+    if let Constraint::Aspect { ratio, about } = cx.q.constraint {
+        own.ext = conformed(own.ext, ratio, &moving, about);
+    }
     let dirs = directions(cx, &frame);
     let degs = degrees(cx, &own, &moving);
     let keep = if matches!(cx.q.rounding, Rounding::None) { 1 } else { 8 };

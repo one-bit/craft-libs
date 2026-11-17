@@ -129,6 +129,73 @@ mod grid_of_boxes {
     }
 }
 
+mod aspect_ratio {
+    use craft_snap::{About, Constraint, Edges, Subject, TurnedBox};
+
+    use super::*;
+
+    fn drag(f: TurnedBox, moving: Edges, ratio: f64, about: About) -> TurnedBox {
+        let t = scene(&[], &[], &[]);
+        let s = Settings::default();
+        let q = Query { constraint: Constraint::Aspect { ratio, about }, ..query(Subject::Edges { frame: f, moving }, &s) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}"));
+        r.frame.unwrap()
+    }
+
+    #[test]
+    fn a_ratio_other_than_the_dragged_boxs_is_the_ratio_the_box_has() {
+        // 4 by 2 dragged by its high corner, a ratio of 3: the smallest box of that ratio that holds it is 6 by 2, and the fixed corner stays.
+        let f = frame(2.0, 1.0, 4.0, 2.0, 0.0);
+        let out = drag(f, Edges { u_max: true, v_max: true, ..Edges::default() }, 3.0, About::Fixed);
+        assert!((out.size.width / out.size.height - 3.0).abs() < 1e-9 && out.size.width >= 4.0 && out.size.height >= 2.0, "{out:?}");
+        let (before, after) = (f.corners(), out.corners());
+        assert!((after[0] - before[0]).hypot() < 1e-9, "the fixed corner stays: {out:?}");
+        // The other way: a ratio of 1 makes the box 4 by 4.
+        let out = drag(f, Edges { u_max: true, v_max: true, ..Edges::default() }, 1.0, About::Fixed);
+        assert!((out.size.width - 4.0).abs() < 1e-9 && (out.size.height - 4.0).abs() < 1e-9, "{out:?}");
+        assert!((out.corners()[0] - before[0]).hypot() < 1e-9, "{out:?}");
+        // The low corner dragged: the high corner stays.
+        let out = drag(f, Edges { u_min: true, v_min: true, ..Edges::default() }, 1.0, About::Fixed);
+        assert!((out.corners()[2] - before[2]).hypot() < 1e-9 && (out.size.width - out.size.height).abs() < 1e-9, "{out:?}");
+    }
+
+    #[test]
+    fn from_a_side_handle_the_other_axis_grows_about_its_middle_and_about_the_centre_all_of_it_does() {
+        let f = frame(2.0, 1.0, 4.0, 2.0, 0.0);
+        let out = drag(f, Edges { u_max: true, ..Edges::default() }, 1.0, About::Fixed);
+        assert!((out.size.width - 4.0).abs() < 1e-9 && (out.size.height - 4.0).abs() < 1e-9, "{out:?}");
+        assert!(
+            (out.corners()[0].x - 0.0).abs() < 1e-9 && (out.centre.y - 1.0).abs() < 1e-9,
+            "the low side stays and the height grows about the middle: {out:?}"
+        );
+        let out = drag(f, Edges { u_max: true, v_max: true, ..Edges::default() }, 3.0, About::Centre);
+        assert!((out.centre - f.centre).hypot() < 1e-9 && (out.size.width / out.size.height - 3.0).abs() < 1e-9, "{out:?}");
+    }
+
+    #[test]
+    fn a_turned_box_gets_the_ratio_along_its_own_axes() {
+        let f = frame(2.0, 1.0, 4.0, 2.0, 0.4);
+        let out = drag(f, Edges { u_max: true, v_max: true, ..Edges::default() }, 3.0, About::Fixed);
+        assert!((out.size.width / out.size.height - 3.0).abs() < 1e-9 && out.angle.to_bits() == 0.4f64.to_bits(), "{out:?}");
+        assert!((out.corners()[0] - f.corners()[0]).hypot() < 1e-9, "{out:?}");
+    }
+
+    #[test]
+    fn a_ratio_that_is_not_a_ratio_is_refused() {
+        let t = scene(&[], &[], &[]);
+        let s = Settings::default();
+        let f = frame(2.0, 1.0, 4.0, 2.0, 0.0);
+        for ratio in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+            let moving = Edges { u_max: true, v_max: true, ..Edges::default() };
+            let q = Query { constraint: Constraint::Aspect { ratio, about: About::Fixed }, ..query(Subject::Edges { frame: f, moving }, &s) };
+            let r = run(&t, &q);
+            assert_eq!(r.work.refused, Some(craft_snap::Refusal::NotFinite), "{ratio}");
+            r.check(&t, &q).unwrap();
+        }
+    }
+}
+
 mod nudge_and_rounding {
     use craft_snap::{Axis, NudgeReach, Rounding, Subject};
 

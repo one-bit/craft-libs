@@ -404,8 +404,8 @@ fn resized(snapped: &Snapped, q: &Query<'_>, t: &Targets) -> Result<(), Broken> 
                 return broken("a resize about the centre moved the centre", f);
             }
         }
-        Constraint::Aspect { .. } => {
-            if !co.same(f.size.width * frame.size.height, frame.size.width * f.size.height) {
+        Constraint::Aspect { ratio, .. } => {
+            if !co.same(f.size.width, ratio * f.size.height) {
                 return broken("a resize that keeps the proportions changed them", f);
             }
         }
