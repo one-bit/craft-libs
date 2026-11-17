@@ -288,3 +288,47 @@ fn a_box_that_ends_exactly_where_the_next_starts_fills_the_gap_a_box_before_it_w
     r.check(&t, &q).unwrap();
     assert!(!r.hits.iter().any(|h| h.kind == Kind::Spacing) && !r.marks.iter().any(|m| matches!(m, Mark::Gap { .. })), "{:?} {:?}", r.hits, r.marks);
 }
+
+#[test]
+fn a_gap_that_is_not_the_smallest_of_the_row_is_repeated_when_it_is_the_nearest() {
+    // The gaps are 20, 20 and 25 (the row()). A box that is 24.6 from the last box is nearer the 25 than the 20: it takes the 25.
+    let t = scene(&row(), &[], &[]);
+    let s = wide();
+    let q = query(box_subject(frame(129.6 + 5.0, 0.0, 10.0, 10.0, 0.0)), &s);
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap();
+    assert!((r.frame.unwrap().centre.x - 5.0 - 130.0).abs() < 1e-9, "{:?}", r.frame);
+    assert!(r.hits.iter().any(|h| h.kind == Kind::Spacing), "{:?}", r.hits);
+}
+
+mod neighbour_gaps {
+    use craft_snap::SpacingGaps;
+
+    use super::*;
+
+    /// Boxes 10 wide with the gaps 20 (first to second) and 40 (second to third).
+    fn scene_of_two_gaps() -> craft_snap::Targets {
+        scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(35.0, 0.0, 10.0, 10.0, 0.0)), (3, frame(85.0, 0.0, 10.0, 10.0, 0.0))], &[], &[])
+    }
+
+    fn lands(gaps: SpacingGaps, left: f64) -> Option<f64> {
+        let s = Settings { spacing_gaps: gaps, ..wide() };
+        let t = scene_of_two_gaps();
+        let q = query(box_subject(frame(left + 5.0, 0.0, 10.0, 10.0, 0.0)), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        r.hits.iter().any(|h| h.kind == Kind::Spacing).then(|| r.frame.unwrap().centre.x - 5.0)
+    }
+
+    #[test]
+    fn with_the_gap_of_the_neighbour_only_the_gap_beyond_the_nearest_box_is_repeated() {
+        // After the last box (ending at 90): its gap to the box before it is 40, so 130; the gap of 20 elsewhere in the row is a gap of the row only.
+        assert_eq!(lands(SpacingGaps::Neighbour, 130.4).map(|x| x.round()), Some(130.0));
+        assert_eq!(lands(SpacingGaps::Neighbour, 110.4), None, "20 is not the neighbour's gap");
+        assert_eq!(lands(SpacingGaps::Row, 110.4).map(|x| x.round()), Some(110.0), "but it is a gap of the row");
+        // Before the first box (starting at 0): its gap to the next is 20, so the box's low side lands 30 below it.
+        assert_eq!(lands(SpacingGaps::Neighbour, -29.6).map(|x| x.round()), Some(-30.0));
+        assert_eq!(lands(SpacingGaps::Neighbour, -49.6), None, "40 is not the first box's gap");
+        assert_eq!(lands(SpacingGaps::Row, -49.6).map(|x| x.round()), Some(-50.0));
+    }
+}
