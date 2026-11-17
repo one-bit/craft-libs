@@ -157,11 +157,18 @@ pub(crate) fn layout(cx: &Ctx<'_>, row: &Row) -> Layout {
     after.sort_by(order);
     let mut gaps = Vec::new();
     for side in [&before, &after] {
+        let mut ends: Vec<(f64, Id)> = side.iter().map(|o| (o.hi, o.id)).collect();
+        ends.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
         for (i, a) in side.iter().enumerate() {
             let j = side.partition_point(|b| b.lo < a.hi - co.tol(b.lo, a.hi));
             let Some(b) = side.get(j.max(i + 1)) else { continue };
             let g = b.lo - a.hi;
-            if g > co.tol(b.lo, a.hi) {
+            // A pair is a gap when each is the other's neighbour: `b` the first to start after `a` ends, and `a` the last to end before `b` starts.
+            // With boxes that overlap there are more of the one than of the other, and a row read from the other end must give the same gaps.
+            let k = ends.partition_point(|h| h.0 <= b.lo + co.tol(h.0, b.lo));
+            // A box of no width ends where it starts, and is not its own neighbour.
+            let last_end = ends.get(..k).and_then(|e| e.iter().rev().find(|h| h.1 != b.id)).map_or(a.hi, |h| h.0);
+            if g > co.tol(b.lo, a.hi) && a.hi >= last_end - co.tol(a.hi, last_end) {
                 gaps.push((g, *a, *b));
             }
         }

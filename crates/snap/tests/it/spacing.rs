@@ -149,3 +149,37 @@ fn an_object_that_only_touches_the_band_across_is_not_in_the_row_wherever_the_sc
         assert_eq!(story(far), near, "{far}");
     }
 }
+
+#[test]
+fn boxes_that_overlap_in_a_row_give_the_same_gaps_read_from_either_end() {
+    // Two boxes on one centre, one taller, and a third beyond: the gap that counts is between the box that ends last and the one that follows. The
+    // scene turned about the page gives the same gap, and the box lands where the turned scene's lands.
+    let s = Settings { frames: craft_snap::Frames { page: false, own: true }, align_reach: None, ..Settings::default() };
+    let objs = [frame(0.0, -8.5, 1.0, 1.0, 0.7), frame(0.0, -8.5, 1.0, 1.5, 0.7), frame(3.0, -10.5, 1.0, 1.0, 0.7)];
+    let subject = frame(-3.5698062013741434, 0.0, 5.535752170506508, 2.7167502578062814, 0.7);
+    let turn = |f: &craft_snap::TurnedBox, a: f64| {
+        let (sn, c) = a.sin_cos();
+        let d = f.centre.to_vec2();
+        craft_snap::TurnedBox { centre: kurbo::Point::new(c * d.x - sn * d.y, sn * d.x + c * d.y), size: f.size, angle: f.angle + a }
+    };
+    let run_at = |a: f64| {
+        let numbered: Vec<(u64, craft_snap::TurnedBox)> = objs.iter().enumerate().map(|(i, o)| (i as u64, turn(o, a))).collect();
+        let t = scene(&numbered, &[], &[]);
+        let q = query(box_subject(turn(&subject, a)), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        let gaps: Vec<f64> = r.marks.iter().filter_map(|m| if let Mark::Gap { value, .. } = m { Some(*value) } else { None }).collect();
+        let back = {
+            let (sn, c) = (-a).sin_cos();
+            kurbo::Vec2::new(c * r.delta.x - sn * r.delta.y, sn * r.delta.x + c * r.delta.y)
+        };
+        (back, gaps)
+    };
+    let (delta, gaps) = run_at(0.0);
+    assert_eq!(gaps.len(), 1, "{gaps:?}");
+    for a in [0.5, 1.2, std::f64::consts::FRAC_PI_2, 2.0, std::f64::consts::PI] {
+        let (d, g) = run_at(a);
+        assert!((d - delta).hypot() < 1e-6, "{a}: {d:?} against {delta:?}");
+        assert!(g.len() == 1 && (g[0] - gaps[0]).abs() < 1e-6, "{a}: {g:?} against {gaps:?}");
+    }
+}
