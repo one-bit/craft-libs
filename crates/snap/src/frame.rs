@@ -1,6 +1,6 @@
 //! Ids, directions, turned boxes, and the one rule for when two numbers are the same place.
 
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use kurbo::{Point, Rect, Size, Vec2};
 
@@ -132,11 +132,18 @@ pub fn canon_side(side: Side, flipped: bool) -> Side {
     }
 }
 
+/// An angle within a turn: what is left of it after whole turns (`angle % TAU`; the remainder of a float by a float is exact). An angle of a
+/// million turns has the geometry of what it has left, and a quarter turn added to it is not lost in its last bit.
+pub fn within_a_turn(angle: f64) -> f64 {
+    angle % TAU
+}
+
 /// The unit vector at `angle`, exact at the multiples of a quarter turn (and within `1e-12` of them).
 pub fn unit(angle: f64) -> Vec2 {
+    let angle = within_a_turn(angle);
     let q = angle / FRAC_PI_2;
     let r = q.round();
-    if (q - r).abs() * FRAC_PI_2 <= 1.0e-12 && r.abs() < 1.0e9 {
+    if (q - r).abs() * FRAC_PI_2 <= 1.0e-12 {
         return match (r as i64).rem_euclid(4) {
             0 => Vec2::new(1.0, 0.0),
             1 => Vec2::new(0.0, 1.0),
@@ -149,6 +156,7 @@ pub fn unit(angle: f64) -> Vec2 {
 
 /// `angle` folded into `[0, π)`, and whether the unit normal at `angle` is the opposite of the one at the folded angle.
 pub fn fold(angle: f64) -> (f64, bool) {
+    let angle = within_a_turn(angle);
     let k = (angle / PI).floor();
     let mut a = angle - k * PI;
     let mut flipped = k.rem_euclid(2.0) == 1.0;
@@ -233,6 +241,11 @@ impl TurnedBox {
             && self.angle.is_finite()
     }
 
+    /// The angle within a turn: the one the geometry is made from.
+    pub fn turn(&self) -> f64 {
+        within_a_turn(self.angle)
+    }
+
     /// The own axis along the width.
     pub fn u(&self) -> Vec2 {
         unit(self.angle)
@@ -261,9 +274,9 @@ impl TurnedBox {
 
     /// How many quarter turns the angle is from a box square to the page (0 to 3), when it is within `tol` radians of one.
     pub fn quarter(&self, tol: f64) -> Option<u8> {
-        let q = self.angle / FRAC_PI_2;
+        let q = self.turn() / FRAC_PI_2;
         let r = q.round();
-        ((q - r).abs() * FRAC_PI_2 <= tol && r.abs() < 1.0e9).then(|| (r as i64).rem_euclid(4) as u8)
+        ((q - r).abs() * FRAC_PI_2 <= tol).then(|| (r as i64).rem_euclid(4) as u8)
     }
 
     /// The box with its own axes, width and height as if square to the page: for a quarter turn the sizes swap, and the angle is 0.
@@ -376,7 +389,7 @@ mod tests {
     #[test]
     fn a_fold_is_never_outside_its_range_whatever_the_rounding_does() {
         // Angles whose quotient by pi rounds up to a whole number leave a hair under zero, and one so small that the sum is pi leaves exactly pi.
-        let (a, _) = fold(53.40707511102648);
+        let (a, _) = fold(-5.0e-324);
         assert_eq!(a, 0.0);
         let (a, flipped) = fold(-1.0e-323);
         assert_eq!((a, flipped), (0.0, false));
@@ -397,11 +410,20 @@ mod tests {
     }
 
     #[test]
-    fn a_quarter_count_beyond_a_billion_turns_is_not_one() {
-        let b = TurnedBox { centre: Point::ORIGIN, size: Size::new(1.0, 1.0), angle: 1.0e9 * FRAC_PI_2 };
-        assert_eq!(b.quarter(1.0), None);
-        let ok = TurnedBox { angle: 999_999_999.0 * FRAC_PI_2, ..b };
-        assert!(ok.quarter(1.0).is_some());
+    fn an_angle_of_many_turns_is_what_it_has_left_after_them() {
+        let b = TurnedBox { centre: Point::ORIGIN, size: Size::new(1.0, 1.0), angle: 0.0 };
+        for turns in [1.0e3, 1.0e9, 1.0e12, 1.0e15] {
+            let many = TurnedBox { angle: 0.3 + turns * TAU, ..b };
+            let left = TurnedBox { angle: many.angle % TAU, ..b };
+            assert_eq!(many.u(), left.u(), "{turns}");
+            assert_eq!(many.quarter(1.0e-3), left.quarter(1.0e-3), "{turns}");
+            assert_eq!(fold(many.angle), fold(left.angle), "{turns}");
+            assert_eq!(many.turn(), many.angle % TAU);
+        }
+        // A billion quarter turns is a whole number of turns: nothing is left, and the box is square to the page.
+        let square = TurnedBox { angle: 1.0e9 * FRAC_PI_2, ..b };
+        assert!(square.quarter(1.0).is_some());
+        assert_eq!(TurnedBox { angle: 999_999_999.0 * FRAC_PI_2, ..b }.turn(), 999_999_999.0 * FRAC_PI_2 % TAU);
     }
 
     #[test]

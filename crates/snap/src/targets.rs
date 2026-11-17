@@ -183,8 +183,8 @@ pub(crate) fn side_lines(frame: &TurnedBox, bounds: Option<Rect>, origin: Point,
         let (hw, hh) = (0.5 * frame.size.width, 0.5 * frame.size.height);
         let (cu, cv) = (u.dot(c.to_vec2()), v.dot(c.to_vec2()));
         for (side, k) in [(Side::Min, -1.0), (Side::Mid, 0.0), (Side::Max, 1.0)] {
-            out.push(SideLine { angle: frame.angle, side, own: OwnOrBounds::Own, offset: cu + k * hw, lo: cv - hh, hi: cv + hh });
-            out.push(SideLine { angle: frame.angle + FRAC_PI_2, side, own: OwnOrBounds::Own, offset: cv + k * hh, lo: -cu - hw, hi: -cu + hw });
+            out.push(SideLine { angle: frame.turn(), side, own: OwnOrBounds::Own, offset: cu + k * hw, lo: cv - hh, hi: cv + hh });
+            out.push(SideLine { angle: frame.turn() + FRAC_PI_2, side, own: OwnOrBounds::Own, offset: cv + k * hh, lo: -cu - hw, hi: -cu + hw });
         }
     }
     out

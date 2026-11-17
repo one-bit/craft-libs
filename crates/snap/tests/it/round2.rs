@@ -221,3 +221,36 @@ mod nudge_and_rounding {
         }
     }
 }
+
+mod angles_of_many_turns {
+    use super::*;
+
+    fn case(a: f64) -> (Vec2, Vec<String>, bool) {
+        let t = scene(&[(1, frame(20.0, 0.4, 8.0, 4.0, a)), (2, frame(-20.0, 3.0, 8.0, 4.0, a)), (3, frame(3.0, 30.0, 8.0, 4.0, a))], &[], &[]);
+        let s = Settings::default();
+        let q = query(box_subject(frame(0.5, 0.0, 8.0, 4.0, a)), &s);
+        let out = run(&t, &q);
+        let marks = out.marks.iter().map(|m| format!("{m:?}")).collect();
+        (out.delta, marks, out.check(&t, &q).is_ok())
+    }
+
+    #[test]
+    fn an_angle_of_many_turns_has_the_geometry_of_what_it_has_left_and_passes_the_check() {
+        for a in [
+            0.3,
+            0.3 + std::f64::consts::TAU * 1.0e6,
+            0.3 + std::f64::consts::TAU * 1.0e9,
+            0.3 + std::f64::consts::TAU * 1.0e15,
+            1.234e300,
+            -1.0e17,
+            7.0e15,
+        ] {
+            let (delta, marks, ok) = case(a);
+            assert!(ok, "{a:e}: the check fails");
+            // What it has left, by the remainder of the float by a turn (which is exact): the same result to the bit.
+            let (delta2, marks2, ok2) = case(a % std::f64::consts::TAU);
+            assert!(ok2);
+            assert_eq!((delta, marks), (delta2, marks2), "{a:e}");
+        }
+    }
+}

@@ -201,7 +201,7 @@ fn directions(cx: &Ctx<'_>, frame: &TurnedBox) -> Vec<(f64, OwnOrBounds)> {
         out.extend([(0.0, OwnOrBounds::Bounds), (std::f64::consts::FRAC_PI_2, OwnOrBounds::Bounds)]);
     }
     if cx.s.frames.own && !quarter {
-        out.extend([(frame.angle, OwnOrBounds::Own), (frame.angle + std::f64::consts::FRAC_PI_2, OwnOrBounds::Own)]);
+        out.extend([(frame.turn(), OwnOrBounds::Own), (frame.turn() + std::f64::consts::FRAC_PI_2, OwnOrBounds::Own)]);
     }
     out
 }
