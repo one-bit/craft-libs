@@ -92,6 +92,9 @@ with another gets no rotation match, and its work says `truncated` with the `ANG
   `Limits::coincide`; the query widens its own rule far from the origin (`Coincide::at`), but the entries were made before. Two edges that are one
   place near the origin can be two entries at 1e11 (a mark then counts one target where it counted two). A set that lives far from the origin should be
   built with `Limits { coincide: Coincide::default().at(far), .. }`, which is what the translation property does to compare what the engine can promise.
+- **A resize far from the origin of a box tilted a hair off the page can lose a mark.** At about 1e6 from the origin, a box tilted 1e-8 to 1e-9
+  radians (inside the tolerance that calls it square to the page, but more than the numbers of its own axes there can hold) resized by a handle can
+  return a hit on a grid line with no mark for it. The mark is left out; a mark is never drawn that is not true. Known, not fixed.
 - **A set is indexed about one origin.** It is the median of the object centres, so one cluster of objects at 1e11 snaps as one at 0, but two
   clusters farther apart than 1e11 cannot both be exact: the smaller one is as coarse as the numbers at the larger. A query whose subject is
   farther than 1e11 from that origin (with anything in the set) says `truncated` with the `FAR_CLUSTER` cut, and a query among the cluster the origin
