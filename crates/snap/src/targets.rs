@@ -554,7 +554,7 @@ impl Targets {
 
     /// The size of an object's box, for a test.
     #[cfg(test)]
-    pub(crate) fn object_size(&self, id: Id) -> Option<Size> {
+    pub(crate) fn object_size(&self, id: Id) -> Option<kurbo::Size> {
         self.objects.iter().find(|o| o.id == id).map(|o| o.frame.size)
     }
 }
@@ -562,6 +562,8 @@ impl Targets {
 #[cfg(test)]
 mod tests {
     use std::f64::consts::PI;
+
+    use kurbo::Size;
 
     use super::*;
 
