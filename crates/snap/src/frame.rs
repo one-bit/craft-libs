@@ -112,9 +112,10 @@ impl Coincide {
         self.abs.max(self.rel * a.abs().max(b.abs()))
     }
 
-    /// Whether `a` and `b` are the same place. Not a number: never.
+    /// Whether `a` and `b` are the same place. Not a number, or an infinity: never.
     pub fn same(&self, a: f64, b: f64) -> bool {
-        (a - b).abs() <= self.tol(a, b)
+        // A place that is not a number is no place: with an infinite tolerance, an infinity was the same place as anything.
+        a.is_finite() && b.is_finite() && (a - b).abs() <= self.tol(a, b)
     }
 
     /// Whether the points are the same place on both axes.

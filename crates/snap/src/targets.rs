@@ -51,6 +51,11 @@ impl Default for Limits {
     }
 }
 
+/// Whether `r` is a rectangle of numbers, and its width and height are numbers too.
+fn has_finite_size(r: Rect) -> bool {
+    [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite()) && (r.x1 - r.x0).is_finite() && (r.y1 - r.y0).is_finite()
+}
+
 /// What an object offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Parts {
@@ -101,7 +106,8 @@ pub struct Object {
     /// Its box, turned or not. The box round it (its bounds) is worked out from this, unless `bounds` says otherwise.
     pub frame: TurnedBox,
     /// The box round its outline, when the app has it and it differs from the box round the frame's corners: used for the page's directions
-    /// (its own sides are still the frame's).
+    /// (its own sides are still the frame's). Bounds that are not a rectangle of finite size (a number that is not one, or a width or height that
+    /// overflows) are left out, as if the app had none.
     pub bounds: Option<Rect>,
     /// Its angle for rotation match, when it differs from the frame's (a line's direction, a flipped shape's own turn).
     pub angle: Option<f64>,
@@ -245,10 +251,15 @@ impl TargetsBuilder {
         if f.size.width < 0.0 || f.size.height < 0.0 {
             return self.refuse(Refused::NotARectangle);
         }
+        // A frame whose corners or whose bounds are too big for a number has no place to be snapped to: refused, not half taken.
+        let (corners, round) = (f.corners(), f.bounds());
+        if !(corners.iter().all(|c| c.is_finite()) && has_finite_size(round)) {
+            return self.refuse(Refused::NotFinite);
+        }
         if self.report.objects >= self.limits.objects {
             return self.refuse(Refused::OverLimit);
         }
-        let bounds = object.bounds.filter(|b| b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite());
+        let bounds = object.bounds.filter(|b| has_finite_size(*b));
         let entry = ObjectEntry { id, frame: object.frame, bounds, angle: object.angle, parts: object.parts };
         if push_checked(&mut self.objects, entry).is_err() {
             return self.refuse(Refused::OverLimit);

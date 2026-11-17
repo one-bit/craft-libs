@@ -254,3 +254,89 @@ mod angles_of_many_turns {
         }
     }
 }
+
+mod numbers_too_big_for_a_place {
+    use craft_snap::{Coincide, Id, Limits, Refused, TargetsBuilder};
+
+    use super::*;
+
+    #[test]
+    fn two_places_one_of_them_not_a_number_are_not_the_same_place() {
+        let co = Settings::default().coincide;
+        for x in [0.0, 1.0, -1.0e300, 1.0e308, f64::MAX] {
+            assert!(!co.same(f64::INFINITY, x) && !co.same(x, f64::INFINITY), "{x}");
+            assert!(!co.same(f64::NEG_INFINITY, x) && !co.same(x, f64::NEG_INFINITY), "{x}");
+        }
+        assert!(!co.same(f64::NAN, f64::NAN) && !co.same(f64::INFINITY, f64::NEG_INFINITY));
+        assert!(
+            !co.same(f64::INFINITY, f64::INFINITY) && !co.same(f64::NEG_INFINITY, f64::NEG_INFINITY),
+            "an infinity is no place, not even its own"
+        );
+        assert!(!co.same_point(Point::new(f64::INFINITY, 0.0), Point::new(1.0, 0.0)));
+        let _ = Coincide::default;
+    }
+
+    #[test]
+    fn an_object_whose_corners_overflow_is_refused_and_the_rest_still_mark() {
+        let mut b = TargetsBuilder::new(Limits::default());
+        b.object(Id(1), object(frame(10.0, 0.0, 4.0, 2.0, 0.0))).unwrap();
+        for (i, f) in
+            [frame(-1.7e308, 1.7e308, 1.0e308, 1.0e308, 0.0), frame(1.7e308, 0.0, 1.0e308, 1.0, 0.3), frame(0.0, 0.0, 1.0e308, 1.0e308, 0.0)]
+                .into_iter()
+                .enumerate()
+        {
+            let r = b.object(Id(20 + i as u64), object(f));
+            // The last one has finite corners and a bounds as wide as a number can be: it is taken or refused whole, and either way the rest is not hurt.
+            if i < 2 {
+                assert_eq!(r, Err(Refused::NotFinite), "{f:?}");
+            }
+        }
+        let t = b.build();
+        let s = Settings::default();
+        let q = query(Subject::Point { at: Point::new(12.1, 0.3), base: None }, &s);
+        let out = run(&t, &q);
+        assert!(!out.hits.is_empty() && !out.marks.is_empty(), "{out:?}");
+        out.check(&t, &q).unwrap();
+    }
+
+    #[test]
+    fn bounds_that_are_not_a_size_are_left_out_as_if_there_were_none() {
+        let s = Settings::default();
+        let with = |bounds: Option<kurbo::Rect>| {
+            let mut b = TargetsBuilder::new(Limits::default());
+            b.object(Id(1), craft_snap::Object { bounds, ..object(frame(10.0, 0.0, 4.0, 2.0, 0.5)) }).unwrap();
+            b.object(Id(2), object(frame(-6.0, 3.0, 4.0, 2.0, 0.0))).unwrap();
+            let t = b.build();
+            let q = query(box_subject(frame(1.0, 1.0, 3.0, 3.0, 0.0)), &s);
+            let out = run(&t, &q);
+            out.check(&t, &q).unwrap();
+            format!("{out:?}")
+        };
+        let none = with(None);
+        for r in [
+            kurbo::Rect::new(f64::NAN, 0.0, 1.0, 1.0),
+            kurbo::Rect::new(0.0, 0.0, f64::INFINITY, 1.0),
+            kurbo::Rect::new(-1.0e308, 0.0, f64::MAX, 1.0e308),
+            kurbo::Rect::new(0.0, -1.0e308, 1.0, f64::MAX),
+        ] {
+            assert_eq!(with(Some(r)), none, "{r:?}");
+        }
+        assert_ne!(with(Some(kurbo::Rect::new(0.0, 0.0, 5.0, 5.0))), none, "bounds that are a size are taken");
+    }
+
+    #[test]
+    fn an_object_as_wide_as_a_number_can_be_does_not_break_what_is_around_it() {
+        let s = Settings::default();
+        for f in [frame(0.0, 0.0, f64::MAX, f64::MAX, 0.0), frame(0.0, 0.0, 1.0e308, 1.0e308, 0.7), frame(1.0e308, -1.0e308, 1.0e308, 1.0, 0.0)] {
+            let mut b = TargetsBuilder::new(Limits::default());
+            b.object(Id(1), object(frame(10.0, 0.0, 4.0, 2.0, 0.0))).unwrap();
+            let _ = b.object(Id(2), object(f));
+            let t = b.build();
+            for subject in [Subject::Point { at: Point::new(12.1, 0.3), base: None }, box_subject(frame(1.0, 1.0, 3.0, 3.0, 0.0))] {
+                let q = query(subject, &s);
+                let out = run(&t, &q);
+                out.check(&t, &q).unwrap_or_else(|b| panic!("{f:?}: {b:?}"));
+            }
+        }
+    }
+}
