@@ -105,7 +105,11 @@ fn combos(lists: &[Vec<Cand>], probes: &[Probe], free: Free) -> Vec<Combo> {
             for a in la {
                 for b in lb {
                     let Some(k) = pair_k(a, b, pa.normal, pb.normal) else { continue };
-                    if k.hypot() <= a.reach.max(b.reach) {
+                    // Within the larger reach; and where both kinds have none, within a few times the farther of the two pulls (a pair of directions nearly
+                    // parallel throws the box without end).
+                    let reach = a.reach.max(b.reach);
+                    let limit = if reach.is_finite() { reach } else { crate::ctx::MAX_AMPLIFICATION * a.t.max(b.t) };
+                    if k.hypot() <= limit {
                         out.push(Combo { degrees: 2, k, a: *a, b: Some(*b) });
                     }
                 }

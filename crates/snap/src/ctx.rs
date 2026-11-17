@@ -29,6 +29,10 @@ pub(crate) struct Ctx<'a> {
     pub gathered: Vec<crate::places::Gathered>,
 }
 
+/// How many times farther than the distance to a line the subject may be taken to reach it, where no reach bounds the travel (a kind of any
+/// reach: a lattice, a step): two directions nearly parallel, or a side nearly parallel to the line, would throw it without end.
+pub(crate) const MAX_AMPLIFICATION: f64 = 8.0;
+
 impl<'a> Ctx<'a> {
     pub fn new(t: &'a Targets, q: &'a Query<'a>) -> Ctx<'a> {
         Ctx {
@@ -70,6 +74,13 @@ impl<'a> Ctx<'a> {
     }
 
     /// Whether a target of this kind at document distance `d` pulls.
+    /// Whether a line is too oblique to the way the subject would travel to reach it, for a kind that has no reach to bound the travel: reaching
+    /// it takes more than [`MAX_AMPLIFICATION`] times the distance to it. `along` is the length of the direction of travel and `across` its
+    /// component square to the line. (A kind with a reach is held by the reach: its travel is what is within it.)
+    pub fn too_oblique(&self, kind: Kind, along: f64, across: f64) -> bool {
+        !self.reach(kind).is_finite() && across.abs() * MAX_AMPLIFICATION < along.abs()
+    }
+
     pub fn pulls(&self, kind: Kind, d: f64) -> bool {
         let r = self.rule(kind);
         r.on && r.reach.within(d, self.zoom)

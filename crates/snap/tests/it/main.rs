@@ -6,5 +6,6 @@ mod invariant;
 mod modes;
 mod moves;
 mod oracle;
+mod round2;
 mod spacing;
 mod turns;

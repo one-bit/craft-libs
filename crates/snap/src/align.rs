@@ -261,13 +261,11 @@ pub(crate) fn probe_cands(cx: &mut Ctx<'_>, probe: &Probe, free: Free) -> Vec<Ca
             let d = f.c - ps.offset;
             let travel = match free {
                 Free::Normal => Some(d),
-                Free::Along(e) => {
-                    let ne = probe.normal.dot(e);
-                    (ne.abs() > 1.0e-12).then(|| d / ne)
-                }
+                Free::Along(e) => Some(d / probe.normal.dot(e)),
             };
             let Some(travel) = travel.filter(|t| t.is_finite()) else { continue };
-            if !cx.pulls(f.kind, travel.abs()) {
+            let across = if let Free::Along(e) = free { probe.normal.dot(e) } else { 1.0 };
+            if !cx.pulls(f.kind, travel.abs()) || cx.too_oblique(f.kind, 1.0, across) {
                 continue;
             }
             out.push(Cand {

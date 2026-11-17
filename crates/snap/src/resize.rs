@@ -237,14 +237,11 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
             let label = crate::frame::canon_side(side_label(*id), flipped);
             let n = crate::frame::unit(a);
             let nw = n.dot(*w);
-            if nw.abs() < 1.0e-12 {
-                continue;
-            }
             let s = n.dot(*p0);
             for f in lines_near(cx, a, s, label) {
                 let g = (f.c - s) / nw;
                 let travel = g.abs() * w.hypot();
-                if !g.is_finite() || !cx.pulls(f.kind, travel) || !deg.kind.valid(&cx.co, own.ext, g) {
+                if !g.is_finite() || !cx.pulls(f.kind, travel) || cx.too_oblique(f.kind, w.hypot(), nw) || !deg.kind.valid(&cx.co, own.ext, g) {
                     continue;
                 }
                 out.push(Cand {

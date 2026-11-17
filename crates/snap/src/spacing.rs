@@ -244,14 +244,13 @@ pub(crate) fn cands(cx: &mut Ctx<'_>, frame: &TurnedBox, probe: &Probe, free: cr
     let mut out = Vec::new();
     for (start, nb) in starts(cx, &row, &lay) {
         let d = start - row.lo;
-        let travel = match free {
-            crate::align::Free::Normal => Some(d),
-            crate::align::Free::Along(e) => {
-                let ne = probe.normal.dot(e);
-                (ne.abs() > 1.0e-12).then(|| d / ne)
-            }
+        let (travel, across) = match free {
+            crate::align::Free::Normal => (d, 1.0),
+            crate::align::Free::Along(e) => (d / probe.normal.dot(e), probe.normal.dot(e)),
         };
-        let Some(travel) = travel.filter(|t| t.is_finite() && cx.pulls(Kind::Spacing, t.abs())) else { continue };
+        if !(travel.is_finite() && cx.pulls(Kind::Spacing, travel.abs())) || cx.too_oblique(Kind::Spacing, 1.0, across) {
+            continue;
+        }
         out.push(Cand {
             kind: Kind::Spacing,
             id: Some(nb.id),
