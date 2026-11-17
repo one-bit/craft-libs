@@ -22,6 +22,7 @@ mod resize;
 pub mod result;
 pub mod settings;
 mod solve;
+mod spacing;
 pub mod targets;
 
 pub use budget::{Budget, Cuts, Made, Refusal, Spend, Work};

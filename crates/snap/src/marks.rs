@@ -128,7 +128,8 @@ fn equal_lengths(cx: &mut Ctx<'_>, value: f64, width: bool, hit: Option<Id>) -> 
 /// The size marks of a resized box: for each own axis that a moving side changes, the final length against other objects' equal lengths.
 fn size_marks(cx: &mut Ctx<'_>, sol: &Solution, frame: &TurnedBox, moving: &crate::query::Edges) -> Vec<Mark> {
     let mut out = Vec::new();
-    for (width, on) in [(true, moving.u_min || moving.u_max), (false, moving.v_min || moving.v_max)] {
+    let on_axis = |width: bool| sol.hits.iter().any(|h| matches!(h, HitRec::Size(c) if (c.angle == 0.0) == width));
+    for (width, on) in [(true, moving.u_min || moving.u_max || on_axis(true)), (false, moving.v_min || moving.v_max || on_axis(false))] {
         if !on {
             continue;
         }
@@ -202,6 +203,12 @@ pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
                 return out;
             }
             out.push(m);
+        }
+        if let (Subject::Box { .. }, Some(f)) = (cx.q.subject, sol.frame) {
+            let gaps = crate::spacing::gap_marks(cx, sol, &f, &probe);
+            let gaps = gaps.into_iter().filter(|m| cx.s.marks != MarkRule::HitsOnly || matches!(m, Mark::Gap { hit: true, .. })).collect();
+            let n = out.len();
+            out.extend(crate::spacing::within_cap(cx, gaps, n));
         }
     }
     if let (Subject::Edges { moving, .. }, Some(f)) = (cx.q.subject, sol.frame) {

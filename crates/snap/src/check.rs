@@ -216,15 +216,20 @@ fn angle_unchanged(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
     }
 }
 
-/// Every hit that is a line has a mark that says so, unless the marks were cut.
+/// Every hit has a mark that says so, unless the marks were cut.
 fn hits_have_marks(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
     let co = &q.settings.coincide;
     if snapped.work.cut.has(crate::budget::Cuts::MARKS) {
         return Ok(());
     }
     for h in &snapped.hits {
-        let Some(d) = h.direction else { continue };
-        let found = snapped.marks.iter().any(|m| matches!(m, Mark::Line { direction, kinds, hit: true, .. } if same_direction(direction.angle(), d.angle(), co) && kinds.contains(&h.kind)));
+        let found = snapped.marks.iter().any(|m| match (h.kind, m) {
+            (Kind::Spacing, Mark::Gap { direction, hit: true, .. }) => h.direction.is_none_or(|d| same_direction(direction.angle(), d.angle(), co)),
+            (Kind::Size, Mark::Size { hit: true, .. }) | (Kind::Angle | Kind::AngleStep, Mark::Angle { hit: true, .. }) => true,
+            (Kind::Point(_) | Kind::Corner | Kind::SideMiddle | Kind::Vertex | Kind::Midpoint | Kind::Nearest | Kind::Intersection | Kind::Tangent | Kind::Perpendicular, Mark::Place { hit: true, .. }) => true,
+            (k, Mark::Line { direction, kinds, hit: true, .. }) => h.direction.is_some_and(|d| same_direction(direction.angle(), d.angle(), co)) && kinds.contains(&k),
+            _ => false,
+        });
         if !found {
             return broken("a hit has no mark", h);
         }
@@ -318,6 +323,36 @@ fn resized(snapped: &Snapped, q: &Query<'_>, t: &Targets) -> Result<(), Broken> 
     Ok(())
 }
 
+/// A gap mark: its segment runs along its direction, its length is its value, and its ends are on facing sides of objects of the set (or of the
+/// subject), which overlap across the segment. Gaps of one chain have one value.
+fn gap_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
+    let Mark::Gap { direction, segment, value, chain, .. } = m else { return Ok(()) };
+    let co = &q.settings.coincide;
+    let (n, tn) = (direction.normal(), direction.tangent());
+    let (a, b) = (n.dot(segment.p0 - t.origin), n.dot(segment.p1 - t.origin));
+    let across = tn.dot(segment.p0 - t.origin);
+    let (lo, hi) = (a.min(b), a.max(b));
+    if !(co.same(tn.dot(segment.p1 - t.origin), across) && co.same(hi - lo, *value) && *value > 0.0) {
+        return broken("a gap mark is not along its direction, or its length is not its value", m);
+    }
+    let boxes = t.objects.iter().filter(|o| o.parts.spacing).map(|o| o.frame).chain(snapped.frame);
+    let (mut left, mut right) = (false, false);
+    for f in boxes {
+        let ((l, h), (c0, c1)) = (crate::spacing::extent(&f, n, t.origin), crate::spacing::extent(&f, tn, t.origin));
+        let covers = c0 <= across + co.tol(c0, across) && across <= c1 + co.tol(c1, across);
+        left |= covers && co.same(h, lo);
+        right |= covers && co.same(l, hi);
+    }
+    if !(left && right) {
+        return broken("an end of a gap mark is not on a facing side of an object", m);
+    }
+    let chain_values: Vec<f64> = snapped.marks.iter().filter_map(|x| if let Mark::Gap { chain: c, value: v, .. } = x { (c == chain).then_some(*v) } else { None }).collect();
+    if chain_values.iter().any(|v| !co.same(*v, *value)) {
+        return broken("a chain holds gaps of different values", m);
+    }
+    Ok(())
+}
+
 impl Snapped {
     /// Checks both ways that every mark is true. It must hold on the final geometry, the constraint and the rounding, and the target it names
     /// must be in the set: a line of those kinds there, the row's objects at a gap's ends, an object of that length or angle, a place there.
@@ -334,6 +369,7 @@ impl Snapped {
             line_mark(targets, query, self, m)?;
             size_mark(targets, query, self, m)?;
             angle_mark(targets, query, self, m)?;
+            gap_mark(targets, query, self, m)?;
         }
         if self.work.marks_dropped != 0 {
             return broken("marks were dropped", self.work.marks_dropped);

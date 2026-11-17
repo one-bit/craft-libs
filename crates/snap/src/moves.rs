@@ -193,11 +193,14 @@ pub(crate) fn point_probes(cx: &Ctx<'_>, at: Point) -> Vec<Probe> {
 }
 
 /// The shared work of a move: candidates per probe, combinations, the choice.
-fn solve_probes(cx: &mut Ctx<'_>, ps: &[Probe], fr: &Freedom, refp: Point, minp: Point) -> Option<(Vec2, Combo)> {
+fn solve_probes(cx: &mut Ctx<'_>, ps: &[Probe], fr: &Freedom, spaced: Option<&TurnedBox>, refp: Point, minp: Point) -> Option<(Vec2, Combo)> {
     let n = keep(&cx.q.rounding);
     let mut lists = Vec::new();
     for p in ps {
-        let cands = probe_cands(cx, p, fr.free);
+        let mut cands = probe_cands(cx, p, fr.free);
+        if let Some(f) = spaced {
+            cands.extend(crate::spacing::cands(cx, f, p, fr.free));
+        }
         lists.push(top(cands, n, cx.s.choose, &cx.co));
     }
     let list = combos(&lists, ps, fr.free);
@@ -213,7 +216,7 @@ pub(crate) fn solve_point(cx: &mut Ctx<'_>, _detail: &mut dyn Detail, at: Point,
     let ps = point_probes(cx, moved);
     let mut sol = Solution::new();
     let mut k = fr.base;
-    if let Some((kk, combo)) = solve_probes(cx, &ps, &fr, at, at) {
+    if let Some((kk, combo)) = solve_probes(cx, &ps, &fr, None, at, at) {
         k = kk;
         sol.hits.push(HitRec::Line(combo.a));
         sol.hits.extend(combo.b.map(HitRec::Line));
@@ -234,7 +237,7 @@ pub(crate) fn solve_box(cx: &mut Ctx<'_>, _detail: &mut dyn Detail, frame: Turne
     let minp = Point::new(frame.bounds().x0, frame.bounds().y0);
     let mut sol = Solution::new();
     let mut k = fr.base;
-    if let Some((kk, combo)) = solve_probes(cx, &ps, &fr, frame.centre, minp) {
+    if let Some((kk, combo)) = solve_probes(cx, &ps, &fr, Some(&moved), frame.centre, minp) {
         k = kk;
         sol.hits.push(HitRec::Line(combo.a));
         sol.hits.extend(combo.b.map(HitRec::Line));
