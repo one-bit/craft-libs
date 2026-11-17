@@ -68,6 +68,9 @@ pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bo
         corners.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max),
         corners.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max),
     );
+    if !cx.work.gather() {
+        return Row { objs: Vec::new(), lo, hi, c0, c1 };
+    }
     let tt = cx.t;
     let (limit, visits) = (u64::from(cx.budget().row) as usize, u64::from(cx.budget().window_visits));
     let g = tt.object_grid(&mut cx.work.made).gather(&window, limit, visits);

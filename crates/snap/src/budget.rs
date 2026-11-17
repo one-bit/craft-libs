@@ -53,6 +53,10 @@ impl Default for Budget {
     }
 }
 
+/// The most bucket-grid windows one query gathers: five to find its candidates (round the subject, and a row along each of up to four
+/// directions) and the rest for checking a candidate again on the geometry it would land on.
+pub const MAX_GATHERS: u64 = 16;
+
 /// Which caps a query met.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Cuts(pub u16);
@@ -119,6 +123,8 @@ pub struct Work {
     pub line_steps: u64,
     /// Bucket entries visited, a shape in several buckets once for each, over all windows.
     pub visited: u64,
+    /// Windows gathered from the bucket grids: at most [`MAX_GATHERS`].
+    pub gathers: u64,
     /// Objects looked at, each once in a window.
     pub examined: u64,
     /// Objects kept near the subject.
@@ -165,6 +171,16 @@ impl Work {
             return false;
         }
         *counter = counter.saturating_add(n);
+        true
+    }
+
+    /// Charges one window gathered. False past [`MAX_GATHERS`]: the window is not gathered, and the work says so.
+    pub fn gather(&mut self) -> bool {
+        if self.gathers >= MAX_GATHERS {
+            self.cut(Cuts::WINDOW_VISITS);
+            return false;
+        }
+        self.gathers += 1;
         true
     }
 

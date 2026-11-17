@@ -417,6 +417,8 @@ impl Grid {
         let (mut y0, mut y1) = (bucket_of(window.y0, self.cell), bucket_of(window.y1, self.cell));
         for (lo, hi) in [(&mut x0, &mut x1), (&mut y0, &mut y1)] {
             if *hi - *lo + 1 > MAX_WINDOW_BUCKETS {
+                // Some of the window is not looked at: the answer says so.
+                found.cut = true;
                 let mid = *lo + (*hi - *lo) / 2;
                 *lo = mid - MAX_WINDOW_BUCKETS / 2;
                 *hi = mid + MAX_WINDOW_BUCKETS / 2 - 1;

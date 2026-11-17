@@ -138,3 +138,30 @@ mod places {
         let _ = Anchors::ALL;
     }
 }
+
+mod turned_resize {
+    use craft_snap::{Edges, Kind, Settings, Subject};
+
+    use crate::common::*;
+
+    #[test]
+    fn a_turned_box_dragged_by_a_side_puts_a_corner_on_a_guide_and_keeps_its_angle_and_its_fixed_sides() {
+        let a = 30f64.to_radians();
+        // A box 20 by 10 turned by 30 degrees, centred at the origin. Its high side along u carries two corners; one is at x = 10 cos(30) - 5 sin(30) and
+        // the other at x = 10 cos(30) + 5 sin(30) = 11.16. A guide at 13 is 1.84 from the second: dragging the side along u by 2.12 puts it there.
+        let t = scene(&[], &[13.0], &[]);
+        let s = Settings::default();
+        let f = frame(0.0, 0.0, 20.0, 10.0, a);
+        let q = query(Subject::Edges { frame: f, moving: Edges { u_max: true, ..Edges::default() } }, &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        let out = r.frame.unwrap();
+        assert_eq!(out.angle.to_bits(), a.to_bits());
+        assert!(r.hits.iter().any(|h| h.kind == Kind::Guide), "{:?}", r.hits);
+        let corners = out.corners();
+        assert!(corners.iter().any(|c| (c.x - 13.0).abs() < 1e-9), "a corner of the moved side is on the guide: {corners:?}");
+        // The fixed side (the low one along u) is where it was.
+        let before = f.corners();
+        assert!((corners[0] - before[0]).hypot() < 1e-9 && (corners[3] - before[3]).hypot() < 1e-9);
+    }
+}

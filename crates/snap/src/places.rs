@@ -256,20 +256,37 @@ pub(crate) fn solve_places(cx: &mut Ctx<'_>, detail: &mut dyn Detail, subject: &
     let t = cx.t;
     let (limit, visits) = (u64::from(cx.budget().candidates) as usize, u64::from(cx.budget().window_visits));
     // The app's own places.
-    let g = t.point_grid(&mut cx.work.made).gather(&window, limit, visits);
-    note(cx, &g);
-    for c in &g.items {
-        if let Some(p) = t.points.get(c.index as usize) {
-            w.offer(cx, Gathered { kind: p.kind, id: p.id, number: Some(p.number), at: p.at });
+    if !t.points.is_empty() && cx.work.gather() {
+        let g = t.point_grid(&mut cx.work.made).gather(&window, limit, visits);
+        note(cx, &g);
+        for c in &g.items {
+            if let Some(p) = t.points.get(c.index as usize) {
+                w.offer(cx, Gathered { kind: p.kind, id: p.id, number: Some(p.number), at: p.at });
+            }
         }
     }
     // The objects near: their boxes' places, and what the detail source gives.
-    let g = t.object_grid(&mut cx.work.made).gather(&window, limit, visits);
-    note(cx, &g);
+    let wants_objects = [
+        Kind::Point(0),
+        Kind::Corner,
+        Kind::SideMiddle,
+        Kind::Vertex,
+        Kind::Midpoint,
+        Kind::Nearest,
+        Kind::Intersection,
+        Kind::Tangent,
+        Kind::Perpendicular,
+    ]
+    .iter()
+    .any(|k| cx.rule(*k).on);
     let mut scan = Scan { asked: 0, sets: Vec::new(), probe: window, base };
-    for c in &g.items {
-        if let Some(o) = t.objects.get(c.index as usize) {
-            from_object(cx, &mut w, detail, o, &mut scan);
+    if wants_objects && !t.objects.is_empty() && cx.work.gather() {
+        let g = t.object_grid(&mut cx.work.made).gather(&window, limit, visits);
+        note(cx, &g);
+        for c in &g.items {
+            if let Some(o) = t.objects.get(c.index as usize) {
+                from_object(cx, &mut w, detail, o, &mut scan);
+            }
         }
     }
     // Outlines the app gave the builder for objects that are not in the grid's window are read only through their object.

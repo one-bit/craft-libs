@@ -26,7 +26,7 @@ mod solve;
 mod spacing;
 pub mod targets;
 
-pub use budget::{Budget, Cuts, Made, Refusal, Spend, Work};
+pub use budget::{Budget, Cuts, MAX_GATHERS, Made, Refusal, Spend, Work};
 pub use frame::{Anchors, Axis, Coincide, Direction, Id, OwnOrBounds, Side, TurnedBox};
 pub use kind::{Kind, KindRule, KindTable, Reach, Scope};
 pub use query::{About, Constraint, Detail, Edges, Lattice, NoDetail, NudgeReach, Query, Rounding, Subject};

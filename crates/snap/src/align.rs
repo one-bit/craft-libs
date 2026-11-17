@@ -113,6 +113,10 @@ fn near_objects(cx: &mut Ctx<'_>, reach: f64) -> Vec<u32> {
     if let Some(n) = &cx.near {
         return n.clone();
     }
+    if !cx.work.gather() {
+        cx.near = Some(Vec::new());
+        return Vec::new();
+    }
     let t = cx.t;
     let window = grown(cx.region, reach);
     let (limit, visits) = (u64::from(cx.budget().candidates), u64::from(cx.budget().window_visits));
