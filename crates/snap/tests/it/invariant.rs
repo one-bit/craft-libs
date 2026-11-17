@@ -121,6 +121,7 @@ proptest! {
         zoom in prop_oneof![Just(0.5), Just(1.0), Just(2.0), Just(8.0)],
         c in resize_constraint(),
         view in prop_oneof![Just(None), (-40.0f64..0.0, -40.0f64..0.0, 0.0f64..40.0, 0.0f64..40.0).prop_map(Some)],
+        r in rounding(),
     ) {
         let objs: Vec<(u64, _)> = objects.iter().enumerate().map(|(i, o)| (i as u64, frame(o.0, o.1, o.2, o.3, o.4))).collect();
         let t = scene(&objs, &gx, &gy);
@@ -133,7 +134,7 @@ proptest! {
             rule.scope = craft_snap::Scope::View;
             s.kinds.set(craft_snap::Kind::Size, rule);
         }
-        let q = craft_snap::Query { zoom, constraint: c, view: index.as_ref(), ..query(Subject::Edges { frame: f, moving }, &s) };
+        let q = craft_snap::Query { zoom, constraint: c, rounding: r, view: index.as_ref(), ..query(Subject::Edges { frame: f, moving }, &s) };
         let out = run(&t, &q);
         prop_assert_eq!(out.work.marks_dropped, 0);
         if let Err(b) = out.check(&t, &q) {

@@ -179,8 +179,37 @@ fn on_lattice(co: &Coincide, v: f64, step: f64) -> bool {
     !(step.is_finite() && step > 0.0) || co.same(v, (v / step).round() * step) || !(v / step).is_finite()
 }
 
+/// A resize under a rounding: the point that led the drag (the middle of a moving side, or the dragged corner of a kept aspect) has the
+/// coordinate it moved along most on the lattice. The check does not repeat which point and which axis led: it asks that some point of the moving
+/// sides (their ends and middles) has a coordinate on the lattice, which a result with no rounding does not have except by chance.
+fn resize_rounding(snapped: &Snapped, q: &Query<'_>, moving: &crate::query::Edges) -> Result<(), Broken> {
+    let (Some(f), co) = (snapped.frame, &q.settings.coincide) else { return Ok(()) };
+    let (step, from) = match q.rounding {
+        Rounding::None => return Ok(()),
+        Rounding::Position(step) => (step, Point::ORIGIN),
+        Rounding::Delta { step, from } => (step, from),
+    };
+    let valid = |s: f64| s.is_finite() && s > 0.0;
+    // A step as large as the box can round it away to nothing, and then the drag stands as it was given: the check asks only where it can.
+    let small = step.x.max(step.y) < f.size.width.min(f.size.height);
+    if !(valid(step.x) && valid(step.y)) || !small || f.size.width <= 0.0 || f.size.height <= 0.0 {
+        return Ok(());
+    }
+    let c = f.corners();
+    let sides: [(bool, [Point; 2]); 4] =
+        [(moving.u_min, [c[0], c[3]]), (moving.u_max, [c[1], c[2]]), (moving.v_min, [c[0], c[1]]), (moving.v_max, [c[3], c[2]])];
+    let on = |p: Point| on_lattice(co, p.x - from.x, step.x) || on_lattice(co, p.y - from.y, step.y);
+    // Held about the centre, or with the proportions kept, a side that was not dragged moves too.
+    let all = !matches!(q.constraint, Constraint::None);
+    let found = sides.iter().filter(|(flag, _)| *flag || all).any(|(_, [a, b])| on(*a) || on(*b) || on(a.midpoint(*b)));
+    if found || !sides.iter().any(|(flag, _)| *flag) { Ok(()) } else { broken("a resize's leading point is not on the lattice on either axis", f) }
+}
+
 /// The rounding holds: the distance moved, or the min corner, is on its lattice, on the axes the constraint leaves to it.
 fn rounding(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
+    if let Subject::Edges { moving, .. } = q.subject {
+        return resize_rounding(snapped, q, &moving);
+    }
     let co = &q.settings.coincide;
     let free = |a: Axis| match q.constraint {
         Constraint::Axis(l) => l == a,

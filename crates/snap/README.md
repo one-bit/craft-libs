@@ -19,7 +19,10 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
   (`LineSpan::Every` or `Nearest`); and what counts as the same place (`Coincide`).
 - **Constraints and rounding are solved inside the snap.** An axis lock, a ray, a kept aspect ratio (from a corner or a side handle), sides that
   move together, a hard lattice of angles, and a rounding lattice all limit the candidates, so the result satisfies them. A candidate that a
-  rounding takes off its line is dropped and the next is tried.
+  rounding takes off its line is dropped and the next is tried. A resize under a rounding rounds the point that leads the drag: the middle of a
+  dragged side, or, with the proportions kept, the dragged corner. The leading point lands on the lattice along the page axis it moves along most,
+  and the other coordinate follows the drag (or the ratio). This holds for a turned box as for one square to the page. A rounding that would
+  collapse or flip the box is not made.
 - **Marks come from the final geometry.** After the geometry is known, each side of it is looked up again among the lines, so a mark is there if
   and only if the geometry lies on it: `Mark::Line`, `Gap` (with its value, in chains), `Size`, `Angle` and `Place`. `Snapped::check` verifies
   every mark, the constraint and the rounding by reading the targets by brute force; it is what the tests assert.

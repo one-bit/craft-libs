@@ -338,24 +338,134 @@ fn holds(cx: &Ctx<'_>, own: &Own, c: &Cand, fin: &Ext) -> bool {
     cx.co.same(crate::frame::unit(c.angle).dot(*p), c.c)
 }
 
-/// The rounding of the sides of an unturned box that move: each lands on the lattice of the step (`Position` only).
-fn rounded(cx: &Ctx<'_>, frame: &TurnedBox, own: &Own, deg: &DegKind, g: f64) -> f64 {
-    let Rounding::Position(step) = cx.q.rounding else { return g };
-    let (Some(q), DegKind::Side(id)) = (frame.quarter(cx.co.angle), deg) else { return g };
-    if q != 0 {
-        return g;
-    }
-    let (step_i, base) = if matches!(id, SideId::UMin | SideId::UMax) {
-        (step.x, if *id == SideId::UMin { own.ext.a0 } else { own.ext.a1 })
-    } else {
-        (step.y, if *id == SideId::VMin { own.ext.b0 } else { own.ext.b1 })
+/// The point of a degree that leads the drag, as a point of a side (which side, and which of its three points), with the way it moves for a unit
+/// of the degree: the middle of the moving side (the max side's when sides move together), or, when the proportions are kept and two sides move,
+/// the dragged corner (the carried point that moves farthest).
+fn leader(deg: &Degree) -> Option<(SideId, usize, Vec2)> {
+    let middle = |max_only: bool| {
+        deg.carried.iter().find(|(_, w, id, idx)| *idx == 1 && (!max_only || matches!(id, SideId::UMax | SideId::VMax)) && w.hypot() > 0.0)
     };
-    let abs = base + if matches!(id, SideId::UMin | SideId::UMax) { cx.o.x } else { cx.o.y };
-    if !(step_i.is_finite() && step_i > 0.0) {
-        return g;
+    let found = match deg.kind {
+        DegKind::Side(_) => middle(false),
+        DegKind::Half(_) => middle(true),
+        DegKind::Scale(..) => {
+            let mut sides: Vec<SideId> = Vec::new();
+            for c in &deg.carried {
+                if !sides.contains(&c.2) {
+                    sides.push(c.2);
+                }
+            }
+            if sides.len() == 1 { middle(false) } else { deg.carried.iter().max_by(|a, b| a.1.hypot().total_cmp(&b.1.hypot())) }
+        }
+    };
+    found.map(|(_, w, id, idx)| (*id, usize::from(*idx), *w))
+}
+
+/// The values of the degrees once the rounding has been applied: the leading point of each degree lands, along the page axis it moves along most,
+/// on the lattice (`Position`: of the step; `Delta`: a whole number of steps from the press), and the other coordinate follows the drag. This holds
+/// for a turned box as for one square to the page, and for a kept aspect, where the leading axis rounds and the other follows the ratio. The leading
+/// points of a turned box depend on each other (a corner drags two sides), so the values are solved together: each leading coordinate is a linear
+/// function of the values, found by moving each by one, and the system is solved exactly. A rounding that cannot be solved, or that would collapse or
+/// flip the box, is not made: the values stand as they were.
+fn round_values(cx: &Ctx<'_>, own: &Own, degs: &[Degree], values: &[f64]) -> Vec<f64> {
+    let (step, from) = match cx.q.rounding {
+        Rounding::None => return values.to_vec(),
+        Rounding::Position(step) => (step, None),
+        Rounding::Delta { step, from } => (step, Some(from)),
+    };
+    // Which degrees have a leading point on an axis with a usable step, and which axis it is.
+    let leads: Vec<Option<(SideId, usize, bool)>> = degs
+        .iter()
+        .map(|d| {
+            let (id, idx, w) = leader(d)?;
+            let x = w.x.abs() >= w.y.abs();
+            let ok = (if x { w.x } else { w.y }).abs() > 1.0e-12
+                && (if x { step.x } else { step.y }).is_finite()
+                && (if x { step.x } else { step.y }) > 0.0;
+            ok.then_some((id, idx, x))
+        })
+        .collect();
+    let rows: Vec<usize> = leads.iter().enumerate().filter(|(_, l)| l.is_some()).map(|(i, _)| i).collect();
+    if rows.is_empty() {
+        return values.to_vec();
     }
-    let want = ((abs + g) / step_i).round() * step_i;
-    if want.is_finite() { want - abs } else { g }
+    let at = |v: &[f64], row: usize| -> f64 {
+        let Some((id, idx, x)) = leads.get(row).copied().flatten() else { return f64::NAN };
+        let pts = own.side_points(id, &applied(degs, own, v));
+        let p = pts.get(idx).copied().unwrap_or(Vec2::ZERO);
+        if x { p.x + cx.o.x } else { p.y + cx.o.y }
+    };
+    let n = rows.len();
+    let base: Vec<f64> = rows.iter().map(|r| at(values, *r)).collect();
+    let want: Vec<f64> = rows
+        .iter()
+        .zip(&base)
+        .map(|(r, b)| {
+            let (st, f) = match leads.get(*r).copied().flatten() {
+                Some((_, _, true)) => (step.x, from.map(|f| f.x)),
+                _ => (step.y, from.map(|f| f.y)),
+            };
+            match f {
+                Some(f) => f + ((b - f) / st).round() * st,
+                None => (b / st).round() * st,
+            }
+        })
+        .collect();
+    // The matrix: how each leading coordinate moves when one degree's value moves by one.
+    let mut m = vec![vec![0.0; n + 1]; n];
+    for (c, dc) in rows.iter().enumerate() {
+        let mut moved = values.to_vec();
+        if let Some(v) = moved.get_mut(*dc) {
+            *v += 1.0;
+        }
+        for (r, row) in rows.iter().enumerate() {
+            if let (Some(cell), Some(b)) = (m.get_mut(r).and_then(|line| line.get_mut(c)), base.get(r)) {
+                *cell = at(&moved, *row) - b;
+            }
+        }
+    }
+    for (r, line) in m.iter_mut().enumerate() {
+        if let (Some(last), Some(w), Some(b)) = (line.get_mut(n), want.get(r), base.get(r)) {
+            *last = w - b;
+        }
+    }
+    let Some(delta) = solve_linear(m) else { return values.to_vec() };
+    let mut out = values.to_vec();
+    for (dc, d) in rows.iter().zip(delta) {
+        if let Some(v) = out.get_mut(*dc) {
+            *v += d;
+        }
+    }
+    let fin = applied(degs, own, &out);
+    let raw = own.ext;
+    let valid = fin.a1 > fin.a0 && fin.b1 > fin.b0;
+    if out.iter().all(|v| v.is_finite()) && (valid || !(raw.a1 > raw.a0 && raw.b1 > raw.b0)) { out } else { values.to_vec() }
+}
+
+/// Solves a small system given as its augmented matrix, by elimination with the largest pivot. `None` for a system that is singular or has
+/// numbers that are not finite.
+fn solve_linear(mut m: Vec<Vec<f64>>) -> Option<Vec<f64>> {
+    let n = m.len();
+    for col in 0..n {
+        let mag = |r: usize| m.get(r).and_then(|line| line.get(col)).map_or(0.0, |v| v.abs());
+        let pivot = (col..n).fold(col, |best, r| if mag(r) > mag(best) { r } else { best });
+        if m.get(pivot)?.get(col)?.abs() < 1.0e-9 {
+            return None;
+        }
+        m.swap(col, pivot);
+        let row = m.get(col)?.clone();
+        for r in 0..n {
+            if r == col {
+                continue;
+            }
+            let k = m.get(r)?.get(col)? / row.get(col)?;
+            for (c, v) in m.get_mut(r)?.iter_mut().enumerate() {
+                *v -= k * row.get(c)?;
+            }
+        }
+    }
+    let out: Vec<f64> = (0..n).map(|i| Some(m.get(i)?.get(n)? / m.get(i)?.get(i)?)).collect::<Option<Vec<f64>>>()?;
+    out.iter().all(|v| v.is_finite()).then_some(out)
 }
 
 /// The extents after every degree took its value.
@@ -378,7 +488,7 @@ pub(crate) fn solve_edges(cx: &mut Ctx<'_>, _detail: &mut dyn Detail, frame: Tur
     }
     let cap = u64::from(cx.budget().solves);
     loop {
-        let values: Vec<f64> = degs.iter().zip(&lists).map(|(d, l)| rounded(cx, &frame, &own, &d.kind, l.first().map_or(0.0, |c| c.d))).collect();
+        let values = round_values(cx, &own, &degs, &lists.iter().map(|l| l.first().map_or(0.0, |c| c.d)).collect::<Vec<f64>>());
         let fin = applied(&degs, &own, &values);
         let collapsed = own.ext.a1 > own.ext.a0 && own.ext.b1 > own.ext.b0 && !(fin.a1 > fin.a0 && fin.b1 > fin.b0);
         let bad = if collapsed {
@@ -395,7 +505,7 @@ pub(crate) fn solve_edges(cx: &mut Ctx<'_>, _detail: &mut dyn Detail, frame: Tur
             l.remove(0);
         }
     }
-    let values: Vec<f64> = degs.iter().zip(&lists).map(|(d, l)| rounded(cx, &frame, &own, &d.kind, l.first().map_or(0.0, |c| c.d))).collect();
+    let values = round_values(cx, &own, &degs, &lists.iter().map(|l| l.first().map_or(0.0, |c| c.d)).collect::<Vec<f64>>());
     let mut sol = Solution::new();
     for c in lists.iter().filter_map(|l| l.first()) {
         sol.hits.push(if c.kind == Kind::Size { HitRec::Size(*c) } else { HitRec::Line(*c) });

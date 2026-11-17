@@ -765,3 +765,95 @@ mod nudge_ahead {
         assert!((nudge(&far, &anywhere, &[], f, Axis::X, true).delta.x - 885.0).abs() < 1e-9, "anywhere on the page it is found");
     }
 }
+
+mod resize_rounding {
+    use craft_snap::{About, Edges, Rounding};
+
+    use super::*;
+
+    fn resized(f: TurnedBox, moving: Edges, constraint: Constraint, rounding: Rounding) -> craft_snap::Snapped {
+        let t = scene(&[], &[], &[]);
+        let s = Settings::default();
+        let q = craft_snap::Query { constraint, rounding, ..query(Subject::Edges { frame: f, moving }, &s) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        r
+    }
+
+    fn on(v: f64, step: f64) -> bool {
+        ((v / step).round() * step - v).abs() < 1e-9
+    }
+
+    #[test]
+    fn under_a_kept_aspect_the_leading_axis_rounds_and_the_other_follows_the_ratio() {
+        // A box 21.3 by 10.65, dragged by its high corner: the corner is at (10.65, 5.325); the lattice has a step of 2.
+        let f = frame(0.0, 0.0, 21.3, 10.65, 0.0);
+        let r = resized(
+            f,
+            Edges { u_max: true, v_max: true, ..Edges::default() },
+            Constraint::Aspect { ratio: 2.0, about: About::Fixed },
+            Rounding::Position(vec2(2.0, 2.0)),
+        );
+        let out = r.frame.unwrap();
+        let corner = out.corners()[2];
+        assert!(on(corner.x, 2.0), "the leading axis (x) rounds: {corner:?}");
+        assert!((out.size.width / out.size.height - 2.0).abs() < 1e-9, "the other axis follows the ratio: {out:?}");
+        let fixed = out.corners()[0];
+        assert!((fixed - f.corners()[0]).hypot() < 1e-9, "the fixed corner stays: {fixed:?}");
+        assert!((corner.x - 10.0).abs() < 1e-9, "10.65 rounds to 10: {corner:?}");
+    }
+
+    #[test]
+    fn a_turned_box_dragged_by_a_side_has_the_middle_of_that_side_on_the_lattice_along_the_axis_it_moves_most() {
+        let a = 30f64.to_radians();
+        let f = frame(0.0, 0.0, 20.37, 10.0, a);
+        let r = resized(f, Edges { u_max: true, ..Edges::default() }, Constraint::None, Rounding::Position(vec2(1.0, 1.0)));
+        let out = r.frame.unwrap();
+        assert_eq!(out.angle.to_bits(), a.to_bits());
+        let c = out.corners();
+        let middle = c[1].midpoint(c[2]);
+        assert!(on(middle.x, 1.0), "the high side moves along u (30 degrees): x leads: {middle:?}");
+        assert!((out.corners()[0] - f.corners()[0]).hypot() < 1e-9 && (c[3] - f.corners()[3]).hypot() < 1e-9, "the fixed side stays");
+    }
+
+    #[test]
+    fn a_press_is_where_the_distance_moved_is_counted_from_under_delta() {
+        // The press was at x = 10.2; the high side is now at 13.3, 3.1 moved, and a step of 2 makes it 4: the side lands on 14.2.
+        let wide = frame(1.65, 0.0, 23.3, 10.0, 0.0);
+        let r = resized(
+            wide,
+            Edges { u_max: true, ..Edges::default() },
+            Constraint::None,
+            Rounding::Delta { step: vec2(2.0, 2.0), from: Point::new(10.2, 0.0) },
+        );
+        let side = r.frame.unwrap().corners()[1].x;
+        assert!((side - 14.2).abs() < 1e-9, "a whole number of steps from the press: {side}");
+    }
+
+    #[test]
+    fn a_turned_box_dragged_by_a_corner_under_a_kept_aspect_has_its_leading_coordinate_on_the_lattice_and_keeps_its_ratio() {
+        let a = 20f64.to_radians();
+        let f = frame(0.0, 0.0, 22.2, 11.1, a);
+        let r = resized(
+            f,
+            Edges { u_max: true, v_max: true, ..Edges::default() },
+            Constraint::Aspect { ratio: 2.0, about: About::Fixed },
+            Rounding::Position(vec2(1.0, 1.0)),
+        );
+        let out = r.frame.unwrap();
+        assert_eq!(out.angle.to_bits(), a.to_bits());
+        assert!((out.size.width / out.size.height - 2.0).abs() < 1e-9, "{out:?}");
+        let corner = out.corners()[2];
+        assert!(on(corner.x, 1.0) || on(corner.y, 1.0), "the corner is on the lattice along one axis: {corner:?}");
+        assert!((out.corners()[0] - f.corners()[0]).hypot() < 1e-9, "the fixed corner stays");
+    }
+
+    #[test]
+    fn sides_that_move_together_keep_the_centre_and_round_the_high_side() {
+        let f = frame(0.0, 0.0, 21.3, 10.0, 0.0);
+        let r = resized(f, Edges { u_max: true, ..Edges::default() }, Constraint::Centre, Rounding::Position(vec2(2.0, 2.0)));
+        let out = r.frame.unwrap();
+        assert_eq!(out.centre, Point::ORIGIN);
+        assert!(on(out.corners()[1].x, 2.0), "{out:?}");
+    }
+}
