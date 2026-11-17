@@ -68,7 +68,8 @@ fn spots(a: Point, b: Point, size: Size, gap: f64) -> Vec<Point> {
 /// Puts a label box beside each line, in the app's screen units. Lines may run in any direction. At most [`MAX_LABELS`] lines are labelled
 /// and [`MAX_AVOID`] boxes avoided, so a call tests at most `32 × 96 × 96` pairs of boxes. A line that is not finite gets no label.
 pub fn place_with(lines: &[Labelled], avoid: &[Rect], gap: f64) -> Vec<Rect> {
-    let mut placed: Vec<Rect> = avoid.iter().take(MAX_AVOID).copied().filter(|r| r.x0.is_finite() && r.y0.is_finite() && r.x1.is_finite() && r.y1.is_finite()).collect();
+    let mut placed: Vec<Rect> =
+        avoid.iter().take(MAX_AVOID).copied().filter(|r| r.x0.is_finite() && r.y0.is_finite() && r.x1.is_finite() && r.y1.is_finite()).collect();
     let gap = if gap.is_finite() && gap >= 0.0 { gap } else { GAP };
     let mut out = Vec::new();
     for (a, b, size) in lines.iter().take(MAX_LABELS) {
@@ -119,7 +120,8 @@ mod tests {
 
     #[test]
     fn labels_never_overlap_even_when_crowded() {
-        let crowd: Vec<Labelled> = (0..100).map(|i| (Point::new(10.0, 10.0), Point::new(10.0 + f64::from(i % 2) * 0.5, 10.0 + f64::from(i % 3) * 0.5), SIZE)).collect();
+        let crowd: Vec<Labelled> =
+            (0..100).map(|i| (Point::new(10.0, 10.0), Point::new(10.0 + f64::from(i % 2) * 0.5, 10.0 + f64::from(i % 3) * 0.5), SIZE)).collect();
         let r = place(&crowd, &[]);
         assert_eq!(r.len(), MAX_LABELS);
         assert!(no_overlaps(&r));

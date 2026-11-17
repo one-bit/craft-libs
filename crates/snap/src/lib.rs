@@ -16,6 +16,7 @@ mod marks;
 mod moves;
 pub mod osnap;
 pub mod query;
+mod resize;
 pub mod result;
 pub mod settings;
 mod solve;

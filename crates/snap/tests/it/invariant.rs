@@ -83,3 +83,43 @@ proptest! {
         }
     }
 }
+
+fn edges() -> impl Strategy<Value = craft_snap::Edges> {
+    (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>())
+        .prop_filter("some side moves", |(a, b, c, d)| *a || *b || *c || *d)
+        .prop_map(|(a, b, c, d)| craft_snap::Edges { u_min: a, u_max: b, v_min: c, v_max: d })
+}
+
+fn resize_constraint() -> impl Strategy<Value = Constraint> {
+    prop_oneof![
+        3 => Just(Constraint::None),
+        1 => Just(Constraint::Centre),
+        1 => (0.3f64..3.0, any::<bool>()).prop_map(|(ratio, c)| Constraint::Aspect { ratio, about: if c { craft_snap::About::Centre } else { craft_snap::About::Fixed } }),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(400))]
+
+    #[test]
+    fn what_is_drawn_is_where_a_resize_lands(
+        objects in prop::collection::vec(object_frame(), 0..12),
+        gx in prop::collection::vec(-40.0f64..40.0, 0..4),
+        gy in prop::collection::vec(-40.0f64..40.0, 0..4),
+        sub in object_frame(),
+        moving in edges(),
+        s in settings(),
+        zoom in prop_oneof![Just(0.5), Just(1.0), Just(2.0), Just(8.0)],
+        c in resize_constraint(),
+    ) {
+        let objs: Vec<(u64, _)> = objects.iter().enumerate().map(|(i, o)| (i as u64, frame(o.0, o.1, o.2, o.3, o.4))).collect();
+        let t = scene(&objs, &gx, &gy);
+        let f = frame(sub.0, sub.1, sub.2, sub.3, sub.4);
+        let q = craft_snap::Query { zoom, constraint: c, ..query(Subject::Edges { frame: f, moving }, &s) };
+        let out = run(&t, &q);
+        prop_assert_eq!(out.work.marks_dropped, 0);
+        if let Err(b) = out.check(&t, &q) {
+            prop_assert!(false, "{:?}\nresult: {:?}", b, out);
+        }
+    }
+}

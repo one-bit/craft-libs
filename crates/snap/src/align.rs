@@ -209,6 +209,8 @@ pub(crate) fn probe_cands(cx: &mut Ctx<'_>, probe: &Probe, free: Free) -> Vec<Ca
                 s: ps.offset,
                 d: travel,
                 t: travel.abs(),
+                rate: 1.0,
+                pt: 0,
                 count: f.count,
             });
         }

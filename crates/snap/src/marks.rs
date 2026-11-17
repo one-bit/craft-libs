@@ -6,12 +6,12 @@ use kurbo::{Line, Vec2};
 use crate::align::lines_find;
 use crate::budget::{Cuts, Work};
 use crate::ctx::{Ctx, Probe};
-use crate::frame::{Direction, Id};
+use crate::frame::{Direction, Id, TurnedBox};
 use crate::kind::Kind;
 use crate::moves::{box_probes, point_probes};
 use crate::query::Subject;
 use crate::result::Mark;
-use crate::settings::MarkRule;
+use crate::settings::{MarkRule, SizeAxes};
 use crate::solve::{HitRec, Solution};
 
 /// The lines one probe's sides lie on at one place.
@@ -30,6 +30,7 @@ fn final_probes(cx: &Ctx<'_>, sol: &Solution) -> Vec<Probe> {
     match (cx.q.subject, sol.point, sol.frame) {
         (Subject::Point { .. }, Some(p), _) => point_probes(cx, p),
         (Subject::Box { u, v, .. }, _, Some(f)) => box_probes(cx, &f, u, v),
+        (Subject::Edges { moving, .. }, _, Some(f)) => crate::resize::edge_probes(cx, &f, &moving),
         _ => Vec::new(),
     }
 }
@@ -37,6 +38,7 @@ fn final_probes(cx: &Ctx<'_>, sol: &Solution) -> Vec<Probe> {
 fn is_hit(sol: &Solution, probe: &Probe, c: f64, cx: &Ctx<'_>) -> bool {
     sol.hits.iter().any(|h| match h {
         HitRec::Line(cand) => (cand.angle - probe.angle).abs() <= cx.co.angle && cx.co.same(cand.c, c),
+        HitRec::Size(_) => false,
     })
 }
 
@@ -91,6 +93,66 @@ fn mark_of(cx: &Ctx<'_>, probe: &Probe, g: &Group) -> Option<Mark> {
     })
 }
 
+/// The own side of a box along an axis: from its first corner to the next along `u` (the width) or along `v` (the height).
+pub(crate) fn own_side(frame: &TurnedBox, width: bool) -> Line {
+    let c = frame.corners();
+    Line::new(c[0], if width { c[1] } else { c[3] })
+}
+
+/// The widths or heights of other objects that equal `value`: how many, and the one named (the hit's, else the lowest id).
+fn equal_lengths(cx: &mut Ctx<'_>, value: f64, width: bool, hit: Option<Id>) -> (u32, Option<Id>) {
+    let t = cx.t;
+    let arrays: Vec<&[crate::index::Length]> = match (cx.s.size_axes, width) {
+        (SizeAxes::EitherAxis, _) => vec![t.widths(&mut cx.work.made), t.heights(&mut cx.work.made)],
+        (SizeAxes::SameAxis, true) => vec![t.widths(&mut cx.work.made)],
+        (SizeAxes::SameAxis, false) => vec![t.heights(&mut cx.work.made)],
+    };
+    let cap = u64::from(cx.budget().line_steps);
+    let (mut count, mut named) = (0u32, None::<Id>);
+    for arr in arrays {
+        cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(crate::index::log_steps(arr.len()));
+        let i = arr.partition_point(|l| l.length < value);
+        let (below, above) = arr.split_at(i.min(arr.len()));
+        for l in below.iter().rev().take_while(|l| cx.co.same(l.length, value)).chain(above.iter().take_while(|l| cx.co.same(l.length, value))) {
+            if !Work::charge(&mut cx.work.line_steps, cap, 1, &mut cx.work.cut, &mut cx.work.truncated, Cuts::LINE_STEPS) {
+                break;
+            }
+            count = count.saturating_add(1);
+            named = Some(named.map_or(l.id, |n| n.min(l.id)));
+        }
+    }
+    (count, hit.filter(|h| named.is_some() && count > 0).or(named))
+}
+
+/// The size marks of a resized box: for each own axis that a moving side changes, the final length against other objects' equal lengths.
+fn size_marks(cx: &mut Ctx<'_>, sol: &Solution, frame: &TurnedBox, moving: &crate::query::Edges) -> Vec<Mark> {
+    let mut out = Vec::new();
+    for (width, on) in [(true, moving.u_min || moving.u_max), (false, moving.v_min || moving.v_max)] {
+        if !on {
+            continue;
+        }
+        let value = if width { frame.size.width } else { frame.size.height };
+        let hit = sol.hits.iter().find_map(|h| match h {
+            HitRec::Size(c) if cx.co.same(c.c, value) => Some(c.id),
+            _ => None,
+        });
+        let (count, named) = equal_lengths(cx, value, width, hit.flatten());
+        if count == 0 || (cx.s.marks == MarkRule::HitsOnly && hit.is_none()) {
+            continue;
+        }
+        let matched = named.and_then(|id| {
+            let t = cx.t;
+            let i = t.objects.partition_point(|o| o.id < id);
+            t.objects.get(i).filter(|o| o.id == id).map(|o| {
+                let by_width = cx.co.same(o.frame.size.width, value);
+                (id, own_side(&o.frame, by_width))
+            })
+        });
+        out.push(Mark::Size { value, side: own_side(frame, width), matched, count, hit: hit.is_some() });
+    }
+    out
+}
+
 /// The marks of the final geometry.
 pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
     let mut out = Vec::new();
@@ -107,6 +169,9 @@ pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
             }
             out.push(m);
         }
+    }
+    if let (Subject::Edges { moving, .. }, Some(f)) = (cx.q.subject, sol.frame) {
+        out.extend(size_marks(cx, sol, &f, &moving));
     }
     out
 }

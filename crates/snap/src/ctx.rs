@@ -114,6 +114,10 @@ pub(crate) struct Cand {
     pub d: f64,
     /// How far the subject travels for it: its distance for the settings.
     pub t: f64,
+    /// How fast the side's offset changes with the free parameter (`d`): 1 for a move along the line's normal.
+    pub rate: f64,
+    /// For a resize: which point of which moving side the line is met by (side number times four, plus the point's index).
+    pub pt: u8,
     pub count: u32,
 }
 
@@ -193,6 +197,8 @@ mod tests {
             s: 0.0,
             d: t,
             t,
+            rate: 1.0,
+            pt: 0,
             count: 1,
         }
     }

@@ -9,6 +9,7 @@ use crate::frame::{Axis, Direction, TurnedBox};
 use crate::marks;
 use crate::moves;
 use crate::query::{Constraint, Detail, Query, Rounding, Subject};
+use crate::resize;
 use crate::result::{Hit, Snapped};
 use crate::targets::Targets;
 
@@ -17,6 +18,8 @@ use crate::targets::Targets;
 pub(crate) enum HitRec {
     /// A side of the subject on a line.
     Line(Cand),
+    /// A width or height of the subject equal to another object's.
+    Size(Cand),
 }
 
 /// Where the subject lands and what it snapped to.
@@ -75,7 +78,8 @@ pub fn snap(targets: &Targets, query: &Query<'_>, detail: &mut dyn Detail) -> Sn
     let sol = match query.subject {
         Subject::Point { at, base } => moves::solve_point(&mut cx, detail, at, base),
         Subject::Box { frame, u, v, own } => moves::solve_box(&mut cx, detail, frame, u, v, own),
-        Subject::Edges { .. } | Subject::Rotate { .. } | Subject::Nudge { .. } => Solution::new(),
+        Subject::Edges { frame, moving } => resize::solve_edges(&mut cx, detail, frame, moving),
+        Subject::Rotate { .. } | Subject::Nudge { .. } => Solution::new(),
     };
     let marks = marks::derive(&mut cx, &sol);
     finish(cx.work, sol, marks)
@@ -89,6 +93,7 @@ fn finish(mut work: Work, sol: Solution, marks: Vec<crate::result::Mark>) -> Sna
 
 fn hit_of(h: &HitRec) -> Hit {
     match h {
+        HitRec::Size(c) => Hit { kind: c.kind, id: c.id, direction: None, side: Some((c.side, c.own)), number: None, distance: c.t },
         HitRec::Line(c) => {
             Hit { kind: c.kind, id: c.id, direction: Direction::new(c.angle), side: Some((c.side, c.own)), number: None, distance: c.t }
         }

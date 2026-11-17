@@ -100,6 +100,7 @@ fn line_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<
     let (ac, _) = canon(direction.angle(), co.angle);
     let (n, tn) = (unit(ac), Vec2::new(-unit(ac).y, unit(ac).x));
     let c = n.dot(segment.p0 - t.origin);
+    let c_off = c;
     let (t0, t1) = (tn.dot(segment.p0 - t.origin), tn.dot(segment.p1 - t.origin));
     if !(segment.p0.is_finite() && segment.p1.is_finite() && offset.is_finite()) {
         return broken("a line mark is not finite", m);
@@ -113,7 +114,17 @@ fn line_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<
         let tol = co.tol(t0.max(t1), lo.max(hi));
         same_direction(a, ac, co) && co.same(off, c) && t0.min(t1) <= lo + tol && t0.max(t1) >= hi - tol
     });
-    if !on {
+    // A resized box's moved sides meet lines in other directions through their ends and middles.
+    let through_point = matches!(q.subject, Subject::Edges { .. })
+        && snapped.frame.is_some_and(|f| {
+            let c = f.corners();
+            let mids = [c[0].midpoint(c[1]), c[1].midpoint(c[2]), c[2].midpoint(c[3]), c[3].midpoint(c[0])];
+            c.into_iter().chain(mids).any(|p| {
+                let tp = tn.dot(p - t.origin);
+                co.same(n.dot(p - t.origin), c_off) && t0.min(t1) <= tp + co.tol(tp, t0) && t0.max(t1) >= tp - co.tol(tp, t1)
+            })
+        });
+    if !(on || through_point) {
         return broken("no side of the final geometry is on a line mark, or its segment does not cover it", m);
     }
     for k in kinds {
@@ -214,6 +225,66 @@ fn hits_have_marks(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
     Ok(())
 }
 
+/// A size mark: the length is the subject's final own width or height, its side is that side of the final box, and the matched object has a
+/// side of that length.
+fn size_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
+    let Mark::Size { value, side, matched, count, .. } = m else { return Ok(()) };
+    let (co, Some(f)) = (&q.settings.coincide, snapped.frame) else { return broken("a size mark without a final box", m) };
+    if !(co.same(*value, f.size.width) || co.same(*value, f.size.height)) {
+        return broken("a size mark is not the final width or height", m);
+    }
+    let corners = f.corners();
+    let on_corner = |p: Point| corners.iter().any(|c| co.same_point(*c, p));
+    if !(on_corner(side.p0) && on_corner(side.p1) && co.same((side.p1 - side.p0).hypot(), *value)) || *count == 0 {
+        return broken("a size mark's side is not a side of the final box", m);
+    }
+    if let Some((id, line)) = matched {
+        let found =
+            t.objects.iter().any(|o| o.id == *id && o.parts.size && (co.same(o.frame.size.width, *value) || co.same(o.frame.size.height, *value)));
+        if !found || !co.same((line.p1 - line.p0).hypot(), *value) {
+            return broken("a size mark names an object that has no side of that length", m);
+        }
+    }
+    Ok(())
+}
+
+/// A resized box keeps the sides that do not move, within the tolerance, and keeps its centre when opposite sides move together.
+fn resized(snapped: &Snapped, q: &Query<'_>, t: &Targets) -> Result<(), Broken> {
+    let (Subject::Edges { frame, moving }, Some(f)) = (q.subject, snapped.frame) else { return Ok(()) };
+    let co = &q.settings.coincide;
+    let ext = |b: &crate::frame::TurnedBox| {
+        let (u, v) = (b.u(), b.v());
+        let c = (b.centre - t.origin).to_point().to_vec2();
+        let (cu, cv) = (u.dot(c), v.dot(c));
+        [cu - 0.5 * b.size.width, cu + 0.5 * b.size.width, cv - 0.5 * b.size.height, cv + 0.5 * b.size.height]
+    };
+    let (before, after) = (ext(&frame), ext(&f));
+    if frame.size.width > 0.0 && frame.size.height > 0.0 && (f.size.width <= 0.0 || f.size.height <= 0.0) {
+        return broken("a resize collapsed or flipped the box", f);
+    }
+    let flags = [moving.u_min, moving.u_max, moving.v_min, moving.v_max];
+    match q.constraint {
+        Constraint::Centre => {
+            if !co.same_point(frame.centre, f.centre) {
+                return broken("a resize about the centre moved the centre", f);
+            }
+        }
+        Constraint::Aspect { .. } => {
+            if !co.same(f.size.width * frame.size.height, frame.size.width * f.size.height) {
+                return broken("a resize that keeps the proportions changed them", f);
+            }
+        }
+        _ => {
+            for i in 0..4 {
+                if !flags.get(i).copied().unwrap_or(false) && !co.same(before.get(i).copied().unwrap_or(0.0), after.get(i).copied().unwrap_or(0.0)) {
+                    return broken("a side that does not move moved", (i, f));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Snapped {
     /// Checks both ways that every mark is true. It must hold on the final geometry, the constraint and the rounding, and the target it names
     /// must be in the set: a line of those kinds there, the row's objects at a gap's ends, an object of that length or angle, a place there.
@@ -225,8 +296,10 @@ impl Snapped {
         angle_unchanged(self, query)?;
         constraint(self, query)?;
         rounding(self, query)?;
+        resized(self, query, targets)?;
         for m in &self.marks {
             line_mark(targets, query, self, m)?;
+            size_mark(targets, query, self, m)?;
         }
         if self.work.marks_dropped != 0 {
             return broken("marks were dropped", self.work.marks_dropped);
