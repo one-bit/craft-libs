@@ -498,7 +498,12 @@ mod reach_across {
             // One object turned by `a`; the subject turned alike, moved 2 along its own u and 0.5 along its own v.
             // Off the origin and asymmetric, so that a sign or an end of a span turned the wrong way shows.
             let at = Point::new(13.0, -7.0);
-            let t = scene(&[(1, frame(at.x, at.y, 20.0, 8.0, a))], &[], &[]);
+            // Two decoys far off to one side put the origin of the targets (the median of the centres) away from the object.
+            let t = scene(
+                &[(1, frame(at.x, at.y, 20.0, 8.0, a)), (2, frame(300.0, 300.0, 2.0, 2.0, 0.0)), (3, frame(400.0, 400.0, 2.0, 2.0, 0.0))],
+                &[],
+                &[],
+            );
             let st = Settings { frames: Frames { page: false, own: true }, ..settings(100.0) };
             let f = frame(at.x + 2.0 * c - 0.5 * s, at.y + 2.0 * s + 0.5 * c, 20.0, 8.0, a);
             let q = query(Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &[] }, &st);
@@ -534,7 +539,16 @@ mod reach_across {
         let tie_other_way = scene(&[(7, frame(-2.25, 0.0, 0.5, 2.0, 0.0)), (3, frame(2.25, 30.0, 0.5, 2.0, 0.0))], &[], &[]);
         assert!((at(&tie_other_way).delta.x - 2.0).abs() < 1e-9, "{:?}", at(&tie_other_way).delta);
         // The nearer line is the first visited object's and has the higher id; the farther one is visited later with the lower id: the nearer stays.
-        let keep = scene(&[(5, frame(2.0, 0.0, 0.2, 2.0, 0.0)), (2, frame(-3.0, 30.0, 0.2, 2.0, 0.0))], &[], &[]);
+        let keep = scene(
+            &[
+                (5, frame(2.0, 0.0, 0.2, 2.0, 0.0)),
+                (2, frame(-3.0, 30.0, 0.2, 2.0, 0.0)),
+                (8, frame(900.0, 900.0, 2.0, 2.0, 0.0)),
+                (9, frame(950.0, 950.0, 2.0, 2.0, 0.0)),
+            ],
+            &[],
+            &[],
+        );
         assert!((at(&keep).delta.x - 1.9).abs() < 1e-9, "{:?}", at(&keep).delta);
     }
 
@@ -542,8 +556,8 @@ mod reach_across {
     fn a_kind_that_is_off_gives_no_line_within_a_reach_across() {
         let mut st = settings(100.0);
         st.kinds.set(Kind::Edge, KindRule { on: false, reach: Reach::Screen(6.0), priority: 3, scope: Scope::All });
-        let t = scene(&[(1, frame(3.0, 0.0, 2.0, 2.0, 0.0))], &[], &[]);
-        // The box's middle is 0; the object's edges are at 2 and 4 and its centre at 3: with edges off, only the centre can be met.
+        let t = scene(&[(1, frame(1.0, 0.0, 2.0, 2.0, 0.0))], &[], &[]);
+        // The box's middle is 0, on the object's low edge (its high edge is at 2, its centre at 1): with edges off, only the centre can be met.
         let q = query(
             Subject::Box {
                 frame: frame(0.0, 0.0, 2.0, 2.0, 0.0),
