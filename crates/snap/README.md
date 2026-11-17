@@ -88,6 +88,10 @@ with another gets no rotation match, and its work says `truncated` with the `ANG
 - **Far from the origin a place is coarser.** The same-place rule grows by a few units in the last place of the largest coordinate in the query, so a
   result is not called off its line for the rounding of its own coordinates; two candidates that are closer than that at 1e11 are told apart by
   the rule, not by their distance.
+- **Lines are grouped once, when the targets are built.** Two lines the same-place rule calls one place are one entry with a count, by the rule in
+  `Limits::coincide`; the query widens its own rule far from the origin (`Coincide::at`), but the entries were made before. Two edges that are one
+  place near the origin can be two entries at 1e11 (a mark then counts one target where it counted two). A set that lives far from the origin should be
+  built with `Limits { coincide: Coincide::default().at(far), .. }`, which is what the translation property does to compare what the engine can promise.
 - **A set is indexed about one origin.** It is the median of the object centres, so one cluster of objects at 1e11 snaps as one at 0, but two
   clusters farther apart than 1e11 cannot both be exact: the smaller one is as coarse as the numbers at the larger. A query whose subject is
   farther than 1e11 from that origin (with anything in the set) says `truncated` with the `FAR_CLUSTER` cut, and a query among the cluster the origin
