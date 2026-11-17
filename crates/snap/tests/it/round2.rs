@@ -765,3 +765,28 @@ mod own_rows_of_many_turns {
         }
     }
 }
+
+mod far_lines_the_check_cannot_tell_apart {
+    use super::*;
+
+    /// Two objects whose left sides are 5e-4 apart at 1e11, where a number is 1.5e-5 coarse and the same-place rule is 3.6e-4: the query keeps them apart, and
+    /// the check, which reads the rule the query read, must not ask a mark to stand for both. (The check once skipped its target rules past 1e6 for fear of
+    /// asking that; with the grouping of the builder the same as the query's, it never did, and the skip is gone.)
+    #[test]
+    fn a_mark_at_1e11_is_not_asked_to_reach_a_line_the_query_kept_apart() {
+        let far = 1.0e11;
+        let t = scene(&[(1, frame(far + 5.0, far, 10.0, 10.0, 0.0)), (2, frame(far + 5.0 + 5.0e-4, far + 100.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let mut s = Settings::default();
+        for k in
+            [Kind::Spacing, Kind::Corner, Kind::SideMiddle, Kind::Vertex, Kind::Midpoint, Kind::Nearest, Kind::Intersection, Kind::Size, Kind::Centre]
+        {
+            let mut r = s.kinds.rule(k);
+            r.on = false;
+            s.kinds.set(k, r);
+        }
+        let q = query(box_subject(frame(far + 5.0, far - 60.0, 10.0, 10.0, 0.0)), &s);
+        let r = run(&t, &q);
+        assert!(r.marks.iter().any(|m| matches!(m, craft_snap::Mark::Line { .. })), "the left side is on a line of the first object: {r:?}");
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+    }
+}

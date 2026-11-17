@@ -161,11 +161,6 @@ fn may_meet(matching: crate::settings::Matching, kind: Kind, side: crate::frame:
 fn line_targets(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark, ac: f64, c: f64, seg: (f64, f64)) -> Result<(), Broken> {
     let Mark::Line { kinds, .. } = m else { return Ok(()) };
     let (co, s) = (&q.settings.coincide, q.settings);
-    // Far from the origin the same-place rule is widened once by the query and again by the check, so the check sees lines at one place that the query
-    // kept apart: which targets a mark stands for is not asked there.
-    if snapped.far(t, q) > 1.0e6 {
-        return Ok(());
-    }
     let mut subject: Vec<(crate::frame::Side, f64, f64)> = final_sides(t, snapped, q)
         .into_iter()
         .filter(|l| snapped.frame.is_none() || if l.own == crate::frame::OwnOrBounds::Own { s.frames.own } else { s.frames.page })
