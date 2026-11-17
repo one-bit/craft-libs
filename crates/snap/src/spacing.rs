@@ -362,12 +362,14 @@ pub(crate) fn gap_marks(cx: &mut Ctx<'_>, sol: &Solution, frame: &TurnedBox, pro
     let direction = Direction::new(probe.angle);
     let t = Vec2::new(-probe.normal.y, probe.normal.x);
     let mut out = Vec::new();
-    let (mut chain, mut last_right): (u16, Option<Option<Id>>) = (0, None);
+    let (mut chain, mut last_right, mut last_value): (u16, Option<Option<Id>>, f64) = (0, None, f64::NAN);
     for g in &recs {
-        if last_right != Some(g.left) {
+        // A chain is a run of gaps that follow one another and have one value: a different value starts a new one.
+        if last_right != Some(g.left) || !co.same(last_value, g.value) {
             chain = chain.saturating_add(1);
         }
         last_right = Some(g.right);
+        last_value = g.value;
         let across = 0.5 * (g.c0 + g.c1);
         let at = |along: f64| cx.o + probe.normal * along + t * across;
         let Some(direction) = direction else { continue };

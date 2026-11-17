@@ -279,8 +279,19 @@ pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
             out.push(m);
         }
         if let (Subject::Box { .. } | Subject::Nudge { .. }, Some(f)) = (cx.q.subject, sol.frame) {
+            // The chains of one direction are numbered on from those of the directions before it: one number is one chain.
+            let before = out.iter().filter_map(|m| if let Mark::Gap { chain, .. } = m { Some(*chain) } else { None }).max().unwrap_or(0);
             let gaps = crate::spacing::gap_marks(cx, sol, &f, &probe);
-            let gaps = gaps.into_iter().filter(|m| cx.s.marks != MarkRule::HitsOnly || matches!(m, Mark::Gap { hit: true, .. })).collect();
+            let gaps = gaps
+                .into_iter()
+                .filter(|m| cx.s.marks != MarkRule::HitsOnly || matches!(m, Mark::Gap { hit: true, .. }))
+                .map(|m| match m {
+                    Mark::Gap { chain, direction, segment, value, subject, hit } => {
+                        Mark::Gap { chain: chain.saturating_add(before), direction, segment, value, subject, hit }
+                    }
+                    other => other,
+                })
+                .collect();
             let n = out.len();
             out.extend(crate::spacing::within_cap(cx, gaps, n));
         }

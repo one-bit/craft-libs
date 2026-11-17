@@ -84,3 +84,46 @@ fn a_staircase_is_a_row_when_linked_and_not_when_banded() {
     assert!((linked.delta.x - 2.0).abs() < 1e-9 && linked.hits.iter().any(|h| h.kind == Kind::Spacing), "{:?} {:?}", linked.delta, linked.hits);
     assert!(linked.marks.iter().any(|m| matches!(m, Mark::Gap { value, hit: true, .. } if (value - 7.0).abs() < 1e-9)), "{:?}", linked.marks);
 }
+
+#[test]
+fn gaps_of_different_values_never_share_a_chain() {
+    // Gaps of 2, then the subject's 2 and its 3, then a 3: two values are each repeated, and the runs of the two are two chains.
+    let objs = [
+        (1, frame(5.0, 0.0, 10.0, 10.0, 0.0)),
+        (2, frame(17.0, 0.0, 10.0, 10.0, 0.0)),
+        (3, frame(42.0, 0.0, 10.0, 10.0, 0.0)),
+        (4, frame(55.0, 0.0, 10.0, 10.0, 0.0)),
+    ];
+    let t = scene(&objs, &[], &[]);
+    let s = wide();
+    let q = query(box_subject(frame(29.0, 0.0, 10.0, 10.0, 0.0)), &s);
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap();
+    let marks: Vec<(f64, u16)> =
+        r.marks.iter().filter_map(|m| if let Mark::Gap { value, chain, .. } = m { Some((*value, *chain)) } else { None }).collect();
+    assert_eq!(marks.len(), 4, "{marks:?}");
+    let chains: std::collections::BTreeSet<u16> = marks.iter().map(|m| m.1).collect();
+    assert_eq!(chains.len(), 2, "{marks:?}");
+    assert!(marks.iter().all(|(v, c)| marks.iter().filter(|(_, d)| d == c).all(|(w, _)| (v - w).abs() < 1e-9)), "{marks:?}");
+}
+
+#[test]
+fn a_chain_number_is_one_chain_across_both_directions_of_the_page() {
+    // A row of gaps of 2 along x, and one of gaps of 3 along y, both repeated by the box.
+    let objs = [
+        (1, frame(5.0, 5.0, 10.0, 10.0, 0.0)),
+        (2, frame(17.0, 5.0, 10.0, 10.0, 0.0)),
+        (3, frame(29.0, 18.0, 10.0, 10.0, 0.0)),
+        (4, frame(29.0, 31.0, 10.0, 10.0, 0.0)),
+    ];
+    let t = scene(&objs, &[], &[]);
+    let s = wide();
+    let q = query(box_subject(frame(29.0, 5.0, 10.0, 10.0, 0.0)), &s);
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap();
+    let marks: Vec<(f64, u16)> =
+        r.marks.iter().filter_map(|m| if let Mark::Gap { value, chain, .. } = m { Some((*value, *chain)) } else { None }).collect();
+    assert_eq!(marks.len(), 4, "{marks:?}");
+    let chains: std::collections::BTreeSet<u16> = marks.iter().map(|m| m.1).collect();
+    assert_eq!(chains.len(), 2, "one number for each of the two chains: {marks:?}");
+}
