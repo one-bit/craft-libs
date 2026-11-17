@@ -342,3 +342,31 @@ fn a_build_at_the_default_limits_with_every_object_turned_fits_in_a_child_under_
     assert!(out.status.success(), "{text}\n{}", String::from_utf8_lossy(&out.stderr));
     assert!(text.contains("CHILD objects=200000 refused=10 over_limit=10"), "{text}");
 }
+
+/// Prints the counts the README quotes. Run with `cargo test -p craft-snap --test it measure -- --ignored --nocapture`.
+#[test]
+#[ignore = "prints the measured costs the README quotes"]
+fn measure() {
+    let s = align_only();
+    for n in [100u64, 10_000, 100_000] {
+        let t = big(n, |i| (i % 5) as f64 * 0.2);
+        let w = probe(&t, &s, (500.0, 20.0));
+        let far = probe(&t, &s, (-1.0e6, -1.0e6));
+        println!(
+            "objects {n}: lines {} places {} | query: bisect_steps {} line_steps {} gathers {} | far query: bisect_steps {}",
+            n * 12,
+            t.report().line_places,
+            w.bisect_steps,
+            w.line_steps,
+            w.gathers,
+            far.bisect_steps
+        );
+    }
+    let t = big(100_000, |i| 0.001 + i as f64 * 1.0e-5);
+    let w = probe(&t, &s, (500.0, 20.0));
+    println!("100,000 angles: bisect_steps {} line_steps {}", w.bisect_steps, w.line_steps);
+    let full = Settings::default();
+    let t = big(5_000, |i| (i % 5) as f64 * 0.2);
+    let w = probe(&t, &full, (500.0, 20.0));
+    println!("5,000 objects, default settings: {w:?}");
+}

@@ -308,7 +308,17 @@ pub(crate) fn gap_marks(cx: &mut Ctx<'_>, sol: &Solution, frame: &TurnedBox, pro
     }
     let equal_to_other =
         |g: &GapRec, all: &[GapRec], others: &[GapRec]| all.iter().chain(others.iter()).any(|o| !std::ptr::eq(o, g) && co.same(o.value, g.value));
-    let values: Vec<f64> = mine.iter().filter(|g| equal_to_other(g, &recs, &mine)).map(|g| g.value).collect();
+    // Under `HitsOnly` only the gap the snap repeated is marked: the subject's gap beside the neighbour it was measured from.
+    let snapped = sol.hits.iter().find_map(|h| match h {
+        HitRec::Line(c) if c.kind == Kind::Spacing => Some(c.id),
+        _ => None,
+    });
+    let hits_only = cx.s.marks == crate::settings::MarkRule::HitsOnly;
+    let values: Vec<f64> = match (hits_only, snapped) {
+        (true, None) => Vec::new(),
+        (true, Some(id)) => mine.iter().filter(|g| id.is_some() && (g.left == id || g.right == id)).map(|g| g.value).collect(),
+        (false, _) => mine.iter().filter(|g| equal_to_other(g, &recs, &mine)).map(|g| g.value).collect(),
+    };
     if values.is_empty() {
         return Vec::new();
     }

@@ -4,7 +4,7 @@
 //! is the app's, and these find the pitch that keeps the lines apart on screen. Each search is bounded.
 
 /// A relative slack for "at least this far apart", so that a pitch that lands exactly on the limit is not turned down by the last bit of a
-/// division.
+/// quotient.
 const SLACK: f64 = 1.0e-9;
 
 /// The most doublings a search makes.

@@ -1,4 +1,4 @@
-//! The modes the owner's ruling P120 (and P123) adds beside the design's first ones: same-side matching, proportions kept from a corner or a
+//! The modes beside the first ones: same-side matching, proportions kept from a corner or a
 //! side handle, a path box for a turned shape, nudging to the first target ahead within a step or anywhere, size match in a view, and a line
 //! mark that runs to the nearest target.
 
