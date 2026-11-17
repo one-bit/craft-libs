@@ -204,6 +204,15 @@ pub(crate) fn cands(cx: &mut Ctx<'_>, frame: &TurnedBox, probe: &Probe, free: cr
     out
 }
 
+/// Whether the box at its final place still repeats a gap in the row it is in then: the row is gathered again there, since moving along the
+/// other direction can change which objects overlap it across.
+pub(crate) fn still_holds(cx: &mut Ctx<'_>, frame: &TurnedBox, probe: &Probe) -> bool {
+    let own = probe.sides.iter().any(|s| s.own == OwnOrBounds::Own);
+    let row = gather_row(cx, frame, probe.normal, own);
+    let lay = layout(cx, &row);
+    starts(cx, &row, &lay).iter().any(|(start, _)| cx.co.same(*start, row.lo))
+}
+
 /// One gap of the final row: its value, the two objects (None for the subject), and where it runs.
 struct GapRec {
     value: f64,

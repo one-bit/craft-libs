@@ -204,6 +204,25 @@ fn rounding(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
     Ok(())
 }
 
+/// The geometry the result returns is the subject moved by the delta it returns, and a box keeps its size.
+fn landed_where_told(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
+    let co = &q.settings.coincide;
+    match (q.subject, snapped.frame, snapped.point) {
+        (Subject::Box { frame, .. } | Subject::Nudge { frame, .. }, Some(f), _) => {
+            if !(co.same_point(frame.centre + snapped.delta, f.centre) && frame.size == f.size) {
+                return broken("the returned box is not the subject moved by the returned delta", (frame, f, snapped.delta));
+            }
+        }
+        (Subject::Point { at, .. }, _, Some(p)) => {
+            if !co.same_point(at + snapped.delta, p) {
+                return broken("the returned point is not the subject moved by the returned delta", (at, p, snapped.delta));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// A turn under a hard lattice lands on it.
 fn hard_lattice(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
     let (Constraint::Angles { step, zero }, Some(a)) = (q.constraint, snapped.angle) else { return Ok(()) };
@@ -423,6 +442,7 @@ impl Snapped {
         if self.angle.is_some_and(|a| !a.is_finite()) {
             return broken("the angle is not a finite number", self.angle);
         }
+        landed_where_told(self, query)?;
         angle_unchanged(self, query)?;
         hard_lattice(self, query)?;
         constraint(self, query)?;

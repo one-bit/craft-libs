@@ -123,3 +123,48 @@ proptest! {
         }
     }
 }
+
+fn grid_frame() -> impl Strategy<Value = (f64, f64, f64, f64, f64)> {
+    (-10i32..10, -6i32..6, 1i32..5, 1i32..5, prop_oneof![Just(0.0), Just(0.0), Just(std::f64::consts::FRAC_PI_2)])
+        .prop_map(|(x, y, w, h, a)| (f64::from(x) * 5.0, f64::from(y) * 5.0, f64::from(w) * 2.0, f64::from(h) * 2.0, a))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1500))]
+
+    /// Scenes on a lattice, where equal gaps, shared edges and corners that coincide are common: the places, the spacing and the lines all
+    /// meet, and every mark must still be true.
+    #[test]
+    fn what_is_drawn_is_where_it_lands_in_a_scene_of_coincidences(
+        objects in prop::collection::vec(grid_frame(), 1..14),
+        points in prop::collection::vec((-50.0f64..50.0, -30.0f64..30.0), 0..4),
+        sub in grid_frame(),
+        jitter in (-3.0f64..3.0, -3.0f64..3.0),
+        s in settings(),
+        c in prop_oneof![3 => Just(Constraint::None), 1 => Just(Constraint::Axis(Axis::X)), 1 => Just(Constraint::Axis(Axis::Y))],
+        r in rounding(),
+        first in any::<bool>(),
+    ) {
+        let objs: Vec<(u64, _)> = objects.iter().enumerate().map(|(i, o)| (i as u64, frame(o.0, o.1, o.2, o.3, o.4))).collect();
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        for (id, f) in &objs {
+            b.object(craft_snap::Id(*id), object(*f)).unwrap();
+        }
+        for (i, p) in points.iter().enumerate() {
+            b.point(Some(craft_snap::Id(500 + i as u64)), Point::new(p.0, p.1), craft_snap::Kind::Point(0), i as u32).unwrap();
+        }
+        let t = b.build();
+        let s = Settings {
+            spacing_reach: craft_snap::SpacingReach { times: 4.0, at_least: 100.0 },
+            places: if first { craft_snap::Places::First } else { craft_snap::Places::Compete { bias: 0.25 } },
+            ..s
+        };
+        let f = frame(sub.0 + jitter.0, sub.1 + jitter.1, sub.2, sub.3, sub.4);
+        let own = [Point::new(sub.0, sub.1)];
+        let q = craft_snap::Query { constraint: c, rounding: r, ..query(Subject::Box { frame: f, u: Anchors::ALL, v: Anchors::ALL, own: &own }, &s) };
+        let out = run(&t, &q);
+        if let Err(b) = out.check(&t, &q) {
+            prop_assert!(false, "{:?}\nresult: {:?}", b, out);
+        }
+    }
+}

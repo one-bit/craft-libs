@@ -15,6 +15,7 @@ use crate::align::{Free, probe_cands};
 use crate::budget::{Cuts, Work};
 use crate::ctx::{Cand, Ctx, Probe, ProbeSide, probes, top};
 use crate::frame::{Anchors, OwnOrBounds, Side, TurnedBox, to_page_axes};
+use crate::kind::Kind;
 use crate::places::{PlaceCand, box_places, solve_places};
 use crate::query::{Constraint, Detail, Rounding};
 use crate::settings::{Choose, Places};
@@ -142,8 +143,22 @@ pub(crate) fn holds(cx: &Ctx<'_>, c: &Cand, k: Vec2) -> bool {
     cx.co.same(c.s + n.dot(k), c.c)
 }
 
+/// A spacing candidate is checked again on the final geometry, where the row may not be the one it was found in.
+fn spacing_holds(cx: &mut Ctx<'_>, c: &Cand, spaced: Option<(&TurnedBox, &[Probe])>, k: Vec2) -> bool {
+    let (Kind::Spacing, Some((frame, probes))) = (c.kind, spaced) else { return true };
+    let Some(probe) = probes.iter().find(|p| (p.angle - c.angle).abs() <= cx.co.angle) else { return false };
+    crate::spacing::still_holds(cx, &TurnedBox { centre: frame.centre + k, ..*frame }, probe)
+}
+
 /// Chooses the combination, applies the rounding, and checks that every candidate it names still holds; if not, the next.
-fn choose(cx: &mut Ctx<'_>, list: Vec<Combo>, fr: &Freedom, refp: Point, minp: Point) -> Option<(Vec2, Combo)> {
+fn choose(
+    cx: &mut Ctx<'_>,
+    list: Vec<Combo>,
+    fr: &Freedom,
+    spaced: Option<(&TurnedBox, &[Probe])>,
+    refp: Point,
+    minp: Point,
+) -> Option<(Vec2, Combo)> {
     let mut list = list;
     let cap = u64::from(cx.budget().solves);
     loop {
@@ -154,7 +169,7 @@ fn choose(cx: &mut Ctx<'_>, list: Vec<Combo>, fr: &Freedom, refp: Point, minp: P
         let combo = list.swap_remove(i);
         let k = fr.base + combo.k;
         let k = round_k(&cx.q.rounding, refp, minp, k, fr.on);
-        let ok = holds(cx, &combo.a, k - fr.base) && combo.b.is_none_or(|b| holds(cx, &b, k - fr.base));
+        let ok = [Some(combo.a), combo.b].into_iter().flatten().all(|c| holds(cx, &c, k - fr.base) && spacing_holds(cx, &c, spaced, k - fr.base));
         if ok {
             return Some((k, combo));
         }
@@ -205,7 +220,7 @@ fn solve_probes(cx: &mut Ctx<'_>, ps: &[Probe], fr: &Freedom, spaced: Option<&Tu
         lists.push(top(cands, n, cx.s.choose, &cx.co));
     }
     let list = combos(&lists, ps, fr.free);
-    choose(cx, list, fr, refp, minp)
+    choose(cx, list, fr, spaced.map(|f| (f, ps)), refp, minp)
 }
 
 /// What a move settled on: lines, or a place.
