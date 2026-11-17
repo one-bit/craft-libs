@@ -209,6 +209,10 @@ fn resize_rounding(snapped: &Snapped, q: &Query<'_>, moving: &crate::query::Edge
 
 /// The rounding holds: the distance moved, or the min corner, is on its lattice, on the axes the constraint leaves to it.
 fn rounding(snapped: &Snapped, q: &Query<'_>) -> Result<(), Broken> {
+    // A nudge goes to its target or by its step: the step is the app's, and a rounding is not asked of it.
+    if matches!(q.subject, Subject::Nudge { .. }) {
+        return Ok(());
+    }
     if let Subject::Edges { moving, .. } = q.subject {
         return resize_rounding(snapped, q, &moving);
     }

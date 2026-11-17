@@ -128,3 +128,29 @@ mod grid_of_boxes {
         }
     }
 }
+
+mod nudge_and_rounding {
+    use craft_snap::{Axis, NudgeReach, Rounding, Subject};
+
+    use super::*;
+
+    #[test]
+    fn a_nudge_goes_to_its_target_or_by_its_step_and_is_not_rounded() {
+        let s = Settings::default();
+        let f = frame(2.3, 1.0, 4.0, 2.0, 0.0);
+        let nudge = |guides: &[f64], rounding: Rounding| {
+            let t = scene(&[], guides, &[]);
+            let q = Query {
+                rounding,
+                ..query(Subject::Nudge { frame: f, bounds: None, axis: Axis::X, forward: true, reach: NudgeReach::Anywhere, fallback: 0.25 }, &s)
+            };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{rounding:?}: {b:?}"));
+            r.delta.x
+        };
+        for rounding in [Rounding::Position(Vec2::new(1.0, 1.0)), Rounding::Delta { step: Vec2::new(1.0, 1.0), from: Point::new(2.3, 1.0) }] {
+            assert_eq!(nudge(&[], rounding), 0.25, "{rounding:?}: the step is the step");
+            assert!((nudge(&[9.55], rounding) - 5.25).abs() < 1e-9, "{rounding:?}: and a target is a target");
+        }
+    }
+}
