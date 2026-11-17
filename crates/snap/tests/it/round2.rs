@@ -89,3 +89,42 @@ mod pair_travel {
         }
     }
 }
+
+mod grid_of_boxes {
+    use super::*;
+
+    fn grid(columns: u64, rows: u64) -> Vec<(u64, craft_snap::TurnedBox)> {
+        (0..columns * rows).map(|i| (i, frame((i % columns) as f64 * 9.0, (i / columns) as f64 * 9.0, 6.0, 4.0, 0.0))).collect()
+    }
+
+    #[test]
+    fn a_box_dropped_among_a_three_by_three_grid_passes_the_check() {
+        let t = scene(&grid(3, 3), &[], &[]);
+        let s = Settings::default();
+        // Over the middle box, off its place by a hair, so that gaps are repeated along both directions and one number would name two chains.
+        for at in [(9.4, 9.3), (4.6, 13.8), (13.4, 4.6), (9.0, 9.0), (4.5, 4.5)] {
+            let q = query(box_subject(frame(at.0, at.1, 6.0, 4.0, 0.0)), &s);
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{at:?}: {b:?}"));
+            let chains: Vec<(u16, f64)> = r
+                .marks
+                .iter()
+                .filter_map(|m| if let craft_snap::Mark::Gap { chain, value, .. } = m { Some((*chain, *value)) } else { None })
+                .collect();
+            for (c, v) in &chains {
+                assert!(chains.iter().filter(|(d, _)| d == c).all(|(_, w)| (w - v).abs() < 1e-9), "{at:?}: {chains:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_box_among_five_thousand_in_a_grid_passes_the_check() {
+        let t = scene(&grid(400, 13), &[], &[]);
+        let s = Settings::default();
+        for at in [(900.4, 45.3), (1800.4, 63.3), (1.0, 1.0)] {
+            let q = query(box_subject(frame(at.0, at.1, 6.0, 4.0, 0.0)), &s);
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{at:?}: {b:?}"));
+        }
+    }
+}
