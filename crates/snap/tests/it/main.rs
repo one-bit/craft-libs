@@ -1,5 +1,6 @@
 mod common;
 mod cost;
+mod hostile;
 mod invariant;
 mod modes;
 mod moves;
