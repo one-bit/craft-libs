@@ -80,7 +80,7 @@ impl Set {
     /// entry of one. Found by bisection in `log2(m)` among the `m` members.
     pub fn nearest_span(&self, e: &Entry, ext: (f64, f64)) -> (f64, f64) {
         let union = (e.lo, e.hi);
-        if e.mn == 0 || !(ext.0 <= ext.1) {
+        if e.mn == 0 || ext.0.partial_cmp(&ext.1).is_none_or(|o| o.is_gt()) {
             return union;
         }
         let range = e.m0 as usize..(e.m0 + e.mn) as usize;
