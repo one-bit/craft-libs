@@ -71,7 +71,7 @@ own local origin, so a small outline far from the origin snaps as it does at the
 bounds its bucket numbers to ±2^31.
 
 Two settings are fixed for a target set once a query has used them: the sorted angles are made for the first `angle_period` asked for (a query
-with another gets no rotation match and says so), and lines are grouped by the `Coincide` the builder was given in `Limits`.
+with another gets no rotation match, and its work says `truncated` with the `ANGLE_PERIOD` cut), and lines are grouped by the `Coincide` the builder was given in `Limits`.
 
 ## What it does not do
 

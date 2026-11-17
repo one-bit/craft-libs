@@ -454,3 +454,31 @@ mod wide_boxes {
         assert!(out.work.visited < 400, "{}", out.work.visited);
     }
 }
+
+mod angle_period {
+    use craft_snap::Cuts;
+
+    use super::*;
+
+    #[test]
+    fn a_query_with_another_period_than_the_first_gets_no_match_and_the_work_says_so() {
+        let t = scene(&[(1, frame(0.0, 0.0, 4.0, 2.0, 0.5)), (2, frame(10.0, 0.0, 4.0, 2.0, 1.0))], &[], &[]);
+        let rotate = |s: &Settings| {
+            let q = query(Subject::Rotate { pivot: Point::ORIGIN, angle: 0.52, radius: 100.0, step: None }, s);
+            let out = run(&t, &q);
+            out.check(&t, &q).unwrap();
+            out
+        };
+        let first = Settings::default();
+        let a = rotate(&first);
+        assert!(a.hits.iter().any(|h| h.kind == Kind::Angle) && !a.work.truncated, "{a:?}");
+        // Another period on the same targets: no sorted angles for it, no rotation match, and a cut says so.
+        let other = Settings { angle_period: std::f64::consts::PI, ..Settings::default() };
+        let b = rotate(&other);
+        assert!(!b.hits.iter().any(|h| h.kind == Kind::Angle), "{b:?}");
+        assert!(b.work.truncated && b.work.cut.has(Cuts::ANGLE_PERIOD), "{:?}", b.work);
+        // The period the angles were made for still works, and says nothing.
+        let c = rotate(&first);
+        assert_eq!((c.hits.len(), c.work.truncated), (a.hits.len(), false));
+    }
+}

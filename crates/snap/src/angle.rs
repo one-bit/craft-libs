@@ -77,7 +77,11 @@ fn lattice_hit(co: &Coincide, raw: f64, step: (f64, f64), kind: Kind, prio: u8) 
 fn matches(cx: &mut Ctx<'_>, raw: f64, lim: f64, hard: Option<(f64, f64)>) -> Option<AngleHit> {
     let (p, co) = (cx.s.angle_period, cx.co);
     let t = cx.t;
-    let arr = t.angles(p, &mut cx.work.made)?;
+    let Some(arr) = t.angles(p, &mut cx.work.made) else {
+        // The angles were sorted for another period: no match is tried, and the work says so.
+        cx.work.cut(crate::budget::Cuts::ANGLE_PERIOD);
+        return None;
+    };
     cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(crate::index::log_steps(arr.len()));
     let raw_f = raw.rem_euclid(p);
     let i = arr.partition_point(|l| l.length < raw_f);

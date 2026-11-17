@@ -194,7 +194,10 @@ fn angle_mark(cx: &mut Ctx<'_>, sol: &Solution, pivot: kurbo::Point, step: Optio
     let a = sol.angle.filter(|a| a.is_finite())?;
     let p = cx.s.angle_period;
     let t = cx.t;
-    let arr = t.angles(p, &mut cx.work.made).unwrap_or(&[]);
+    let arr = t.angles(p, &mut cx.work.made).unwrap_or_else(|| {
+        cx.work.cut(crate::budget::Cuts::ANGLE_PERIOD);
+        &[]
+    });
     cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(crate::index::log_steps(arr.len()));
     let a_f = a.rem_euclid(p);
     let tol = crate::angle::tolerance(&cx.co, a, 0.0);

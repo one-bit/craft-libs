@@ -75,6 +75,8 @@ impl Cuts {
     pub const ROW: u16 = 1 << 9;
     pub const MARKS: u16 = 1 << 10;
     pub const DETAIL: u16 = 1 << 11;
+    /// The sorted angles were made for another `angle_period` than the query's: no rotation match was tried.
+    pub const ANGLE_PERIOD: u16 = 1 << 12;
 
     /// Whether the cap was met.
     pub fn has(&self, bit: u16) -> bool {
@@ -252,6 +254,7 @@ mod tests {
             Cuts::ROW,
             Cuts::MARKS,
             Cuts::DETAIL,
+            Cuts::ANGLE_PERIOD,
         ];
         assert!(cuts.iter().all(|c| c.count_ones() == 1), "{cuts:?}");
         assert_eq!(cuts.iter().fold(0u16, |all, c| all | c).count_ones() as usize, cuts.len(), "no two share a bit");
