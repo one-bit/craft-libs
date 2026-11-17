@@ -36,6 +36,15 @@ pub enum Subject<'a> {
 
 impl Subject<'_> {
     /// The largest coordinate of the subject (not a number that is not finite: those are refused before it is read).
+    /// Where the subject is: the middle of its box, its point, or its pivot.
+    pub(crate) fn at(&self) -> Point {
+        match self {
+            Subject::Point { at, .. } => *at,
+            Subject::Box { frame, .. } | Subject::Edges { frame, .. } | Subject::Nudge { frame, .. } => frame.centre,
+            Subject::Rotate { pivot, .. } => *pivot,
+        }
+    }
+
     pub(crate) fn far(&self) -> f64 {
         let big = |p: Point| if p.x.is_finite() && p.y.is_finite() { p.x.abs().max(p.y.abs()) } else { 0.0 };
         match self {

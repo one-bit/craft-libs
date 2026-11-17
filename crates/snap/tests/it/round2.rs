@@ -548,3 +548,44 @@ mod curve_solves {
         }
     }
 }
+
+mod two_clusters {
+    use craft_snap::Cuts;
+
+    use super::*;
+
+    fn clusters(far: f64) -> craft_snap::Targets {
+        let mut objs: Vec<(u64, craft_snap::TurnedBox)> =
+            vec![(1, frame(10.0, 0.0, 4.0, 2.0, 0.0)), (2, frame(20.0, 5.0, 4.0, 2.0, 0.0)), (3, frame(30.0, 9.0, 4.0, 2.0, 0.0))];
+        objs.extend((0..4u64).map(|i| (10 + i, frame(far + i as f64 * 10.0, far, 4.0, 2.0, 0.0))));
+        scene(&objs, &[], &[])
+    }
+
+    #[test]
+    fn a_query_far_from_the_origin_the_targets_are_indexed_about_says_so() {
+        let s = Settings::default();
+        // Four of the seven objects are at 1e15, so the origin is there, and the three at 10 to 30 are as far from it as the numbers there say.
+        for far in [1.0e12, 1.0e15, 1.0e300] {
+            let t = clusters(far);
+            let near = query(box_subject(frame(14.3, 0.2, 4.0, 2.0, 0.0)), &s);
+            let r = run(&t, &near);
+            assert!(r.work.truncated && r.work.cut.has(Cuts::FAR_CLUSTER), "{far:e}: {:?}", r.work);
+            // A query among the objects the origin was taken from is as good as ever.
+            let at = frame(far + 12.3, far + 0.2, 4.0, 2.0, 0.0);
+            let q = query(box_subject(at), &s);
+            let r = run(&t, &q);
+            assert!(!r.work.cut.has(Cuts::FAR_CLUSTER), "{far:e}: {:?}", r.work);
+        }
+        // One cluster and the subject in it, far from the page's origin or not: nothing to say.
+        for far in [0.0, 1.0e6, 1.0e9, 1.0e11] {
+            let objs: Vec<(u64, craft_snap::TurnedBox)> = (0..5u64).map(|i| (i + 1, frame(far + i as f64 * 10.0, far, 4.0, 2.0, 0.0))).collect();
+            let t = scene(&objs, &[], &[]);
+            let q = query(box_subject(frame(far + 14.3, far + 0.2, 4.0, 2.0, 0.0)), &s);
+            assert!(!run(&t, &q).work.cut.has(Cuts::FAR_CLUSTER), "{far:e}");
+        }
+        // A set with nothing in it has nothing to be far from.
+        let empty = scene(&[], &[], &[]);
+        let q = query(box_subject(frame(1.0e300, 1.0e300, 4.0, 2.0, 0.0)), &s);
+        assert!(!run(&empty, &q).work.truncated);
+    }
+}

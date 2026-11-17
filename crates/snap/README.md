@@ -87,6 +87,10 @@ with another gets no rotation match, and its work says `truncated` with the `ANG
 - **Far from the origin a place is coarser.** The same-place rule grows by a few units in the last place of the largest coordinate in the query, so a
   result is not called off its line for the rounding of its own coordinates; two candidates that are closer than that at 1e11 are told apart by
   the rule, not by their distance.
+- **A set is indexed about one origin.** It is the median of the object centres, so one cluster of objects at 1e11 snaps as one at 0, but two
+  clusters farther apart than 1e11 cannot both be exact: the smaller one is as coarse as the numbers at the larger. A query whose subject is
+  farther than 1e11 from that origin (with anything in the set) says `truncated` with the `FAR_CLUSTER` cut, and a query among the cluster the origin
+  was taken from does not.
 
 ## Measured costs
 

@@ -87,6 +87,14 @@ pub fn snap(targets: &Targets, query: &Query<'_>, detail: &mut dyn Detail) -> Sn
         cx.work.refused = Some(why);
         return Snapped::empty(cx.work);
     }
+    // The targets are indexed about one origin. A subject farther from it than the numbers there can place to a hair is snapped as coarsely as they
+    // are (two clusters of objects farther apart than that can only both be right about their own origin), and the work says so.
+    if targets.report().objects + targets.report().lines + targets.report().points > 0 {
+        let from = query.subject.at() - targets.origin().to_vec2();
+        if from.x.abs().max(from.y.abs()) > crate::budget::MAX_SPREAD {
+            cx.work.cut(crate::budget::Cuts::FAR_CLUSTER);
+        }
+    }
     let sol = match query.subject {
         Subject::Point { at, base } => moves::solve_point(&mut cx, detail, at, base),
         Subject::Box { frame, u, v, own, .. } => moves::solve_box(&mut cx, detail, frame, u, v, own),

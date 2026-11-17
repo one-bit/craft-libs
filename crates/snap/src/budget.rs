@@ -58,6 +58,10 @@ impl Default for Budget {
 /// says so. It bounds the worst page; an ordinary query gathers fewer than a dozen.
 pub const MAX_GATHERS: u64 = 16;
 
+/// How far a subject may be from the origin the targets are indexed about before its snaps are coarser than a hair: at 1e11 a number has five
+/// digits after the point, and the same-place rule is widened by what that leaves.
+pub const MAX_SPREAD: f64 = 1.0e11;
+
 /// Which caps a query met.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Cuts(pub u16);
@@ -77,6 +81,9 @@ impl Cuts {
     pub const DETAIL: u16 = 1 << 11;
     /// The sorted angles were made for another `angle_period` than the query's: no rotation match was tried.
     pub const ANGLE_PERIOD: u16 = 1 << 12;
+    /// The subject is farther from the origin the targets are indexed about than their numbers can say places at: its snaps are as coarse as the
+    /// coordinates there. (A set of two clusters farther apart than that has one origin, and the smaller cluster is the one that suffers.)
+    pub const FAR_CLUSTER: u16 = 1 << 13;
 
     /// Whether the cap was met.
     pub fn has(&self, bit: u16) -> bool {
@@ -255,6 +262,7 @@ mod tests {
             Cuts::MARKS,
             Cuts::DETAIL,
             Cuts::ANGLE_PERIOD,
+            Cuts::FAR_CLUSTER,
         ];
         assert!(cuts.iter().all(|c| c.count_ones() == 1), "{cuts:?}");
         assert_eq!(cuts.iter().fold(0u16, |all, c| all | c).count_ones() as usize, cuts.len(), "no two share a bit");
