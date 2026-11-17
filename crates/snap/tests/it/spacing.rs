@@ -127,3 +127,25 @@ fn a_chain_number_is_one_chain_across_both_directions_of_the_page() {
     let chains: std::collections::BTreeSet<u16> = marks.iter().map(|m| m.1).collect();
     assert_eq!(chains.len(), 2, "one number for each of the two chains: {marks:?}");
 }
+
+#[test]
+fn an_object_that_only_touches_the_band_across_is_not_in_the_row_wherever_the_scene_is() {
+    // The edge snap puts the box's side on a neighbour's edge, so the neighbour touches the box's band across; whether the last bits say it overlaps by
+    // a hair must not decide whether the row holds it, or the answer follows the noise of the numbers instead of the scene.
+    let s = Settings::default();
+    let story = |far: f64| {
+        let by = kurbo::Vec2::new(far, -far * 0.5);
+        let objs = [(0, frame(9.5, 10.5, 1.5, 1.5, 0.0)), (1, frame(8.0, -1.5, 2.5, 3.5, 0.7))]
+            .map(|(i, f)| (i, craft_snap::TurnedBox { centre: f.centre + by, ..f }));
+        let t = scene(&objs, &[], &[]);
+        let f = frame(11.379139162409112 + by.x, 4.686806487458091 + by.y, 1.0770963054045937, 5.367554291708136, 0.3);
+        let q = query(box_subject(f), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        r.hits.iter().map(|h| (h.kind, h.id)).collect::<Vec<_>>()
+    };
+    let near = story(0.0);
+    for far in [1.0, 10.0, 1.0e3, 1.0e4, 1.0e6] {
+        assert_eq!(story(far), near, "{far}");
+    }
+}

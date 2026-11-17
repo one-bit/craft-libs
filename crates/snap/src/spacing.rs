@@ -100,10 +100,16 @@ pub(crate) fn gather_row(cx: &mut Ctx<'_>, subject: &TurnedBox, n: Vec2, own: bo
         })
         .collect::<Vec<RowObj>>();
     let objs = match cx.s.spacing_row {
-        SpacingRow::Band => objs.into_iter().filter(|o| o.c0 < c1 && c0 < o.c1).collect(),
+        // An object that only touches the subject's band across (a snap to its edge puts it there) is not in the row, whatever the last bits say.
+        SpacingRow::Band => objs.into_iter().filter(|o| overlaps_across(&cx.co, (c0, c1), o)).collect(),
         SpacingRow::Linked => linked(cx, objs, (lo, hi), (c0, c1)),
     };
     Row { objs, lo, hi, c0, c1 }
+}
+
+/// Whether an object overlaps the band `a` across the row by more than the same-place rule can tell from touching.
+fn overlaps_across(co: &crate::frame::Coincide, a: (f64, f64), o: &RowObj) -> bool {
+    o.c0 < a.1 - co.tol(o.c0, a.1) && a.0 + co.tol(a.0, o.c1) < o.c1
 }
 
 /// A linked row: from each neighbour outward, the next object that overlaps the previous one across, so a staircase of objects is a row.
@@ -120,7 +126,7 @@ fn linked(cx: &Ctx<'_>, objs: Vec<RowObj>, (lo, hi): (f64, f64), across: (f64, f
     // Nearest the subject first on each side.
     before.sort_by(|a, b| b.hi.total_cmp(&a.hi).then(a.id.cmp(&b.id)));
     after.sort_by(|a, b| a.lo.total_cmp(&b.lo).then(a.id.cmp(&b.id)));
-    let overlaps = |a: (f64, f64), o: &RowObj| o.c0 < a.1 && a.0 < o.c1;
+    let overlaps = |a: (f64, f64), o: &RowObj| overlaps_across(&co, a, o);
     let mut out = Vec::new();
     for side in [before, after] {
         let mut current = across;
