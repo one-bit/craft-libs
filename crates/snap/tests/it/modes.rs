@@ -565,3 +565,82 @@ mod reach_across {
         assert!(short.cut.has(Cuts::WINDOW_VISITS), "{short:?}");
     }
 }
+
+mod nudge_ahead {
+    use craft_snap::{Lattice, NudgeReach, Reach};
+
+    use super::*;
+
+    fn nudge(t: &craft_snap::Targets, s: &Settings, lats: &[Lattice], f: TurnedBox, axis: Axis, forward: bool) -> craft_snap::Snapped {
+        let q = craft_snap::Query {
+            lattices: lats,
+            ..query(Subject::Nudge { frame: f, bounds: None, axis, forward, reach: NudgeReach::Anywhere, fallback: 0.5 }, s)
+        };
+        let r = run(t, &q);
+        r.check(t, &q).unwrap();
+        r
+    }
+
+    fn only_lines() -> Settings {
+        let mut s = Settings::default();
+        for k in [Kind::Corner, Kind::SideMiddle, Kind::Spacing, Kind::Size] {
+            s.kinds.set(k, KindRule { on: false, reach: Reach::Screen(6.0), priority: 1, scope: Scope::All });
+        }
+        s
+    }
+
+    fn grid(pitch: f64) -> Lattice {
+        Lattice { origin: Point::new(0.0, 0.0), pitch: vec2(pitch, pitch), kind: Kind::Grid }
+    }
+
+    #[test]
+    fn the_next_lattice_line_ahead_is_the_stop_in_either_direction_and_a_side_on_a_line_moves_off_it() {
+        let t = scene(&[], &[], &[]);
+        let s = only_lines();
+        let lats = [grid(7.0)];
+        // Sides at -10, 0, 10: the lines are at multiples of 7. Forward: -10 to -7 (3), 0 to 7 (7), 10 to 14 (4): the nearest is 3.
+        let f = frame(0.0, 0.0, 20.0, 4.0, 0.0);
+        assert!((nudge(&t, &s, &lats, f, Axis::X, true).delta.x - 3.0).abs() < 1e-9);
+        // Backward: 10 to 7 (3), 0 to -7 (7), -10 to -14 (4).
+        assert!((nudge(&t, &s, &lats, f, Axis::X, false).delta.x + 3.0).abs() < 1e-9);
+        // Sides on lines (-7, 0, 7): the next is a whole pitch away, not the line it is on.
+        let on = frame(0.0, 0.0, 14.0, 4.0, 0.0);
+        assert!((nudge(&t, &s, &lats, on, Axis::X, true).delta.x - 7.0).abs() < 1e-9);
+        assert!((nudge(&t, &s, &lats, on, Axis::X, false).delta.x + 7.0).abs() < 1e-9);
+        // Along y, with the height's sides at -3.5, 0, 3.5 on lines.
+        let tall = frame(0.0, 0.0, 4.0, 7.0, 0.0);
+        assert!((nudge(&t, &s, &lats, tall, Axis::Y, true).delta.y - 3.5).abs() < 1e-9);
+        assert!((nudge(&t, &s, &lats, tall, Axis::Y, false).delta.y + 3.5).abs() < 1e-9);
+        // A pitch that is not a number has no lines: the fallback.
+        let bad = [Lattice { pitch: vec2(f64::NAN, 0.0), ..grid(1.0) }];
+        assert_eq!(nudge(&t, &s, &bad, f, Axis::X, true).delta.x, 0.5);
+    }
+
+    #[test]
+    fn a_guide_behind_stops_a_backward_nudge_and_one_just_past_the_tolerance_counts_as_ahead() {
+        let s = only_lines();
+        let f = frame(0.0, 0.0, 20.0, 4.0, 0.0);
+        let t = scene(&[], &[-13.7], &[]);
+        assert!((nudge(&t, &s, &[], f, Axis::X, false).delta.x + 3.7).abs() < 1e-9);
+        assert_eq!(nudge(&t, &s, &[], f, Axis::X, true).delta.x, 0.5, "behind is not ahead");
+        // A guide exactly on the box's high side is not ahead of that side (the middle side, 10 behind it, is the one that reaches it); one 1e-6 past it is.
+        let on = scene(&[], &[10.0], &[]);
+        assert!((nudge(&on, &s, &[], f, Axis::X, true).delta.x - 10.0).abs() < 1e-9);
+        let past = scene(&[], &[10.000_001], &[]);
+        assert!((nudge(&past, &s, &[], f, Axis::X, true).delta.x - 0.000_001).abs() < 1e-9);
+    }
+
+    #[test]
+    fn within_a_reach_across_the_next_object_line_ahead_is_found_and_one_beyond_the_reach_is_not() {
+        let t =
+            scene(&[(1, frame(35.0, 0.0, 10.0, 4.0, 0.0)), (2, frame(-35.0, 0.0, 10.0, 4.0, 0.0)), (3, frame(900.0, 0.0, 10.0, 4.0, 0.0))], &[], &[]);
+        let s = Settings { align_reach: Some(Reach::Document(60.0)), ..only_lines() };
+        let f = frame(0.0, 0.0, 20.0, 4.0, 0.0);
+        assert!((nudge(&t, &s, &[], f, Axis::X, true).delta.x - 20.0).abs() < 1e-9, "the edge at 30 from the high side at 10");
+        assert!((nudge(&t, &s, &[], f, Axis::X, false).delta.x + 20.0).abs() < 1e-9);
+        let far = scene(&[(3, frame(900.0, 0.0, 10.0, 4.0, 0.0))], &[], &[]);
+        assert_eq!(nudge(&far, &s, &[], f, Axis::X, true).delta.x, 0.5, "past the reach there is nothing ahead");
+        let anywhere = only_lines();
+        assert!((nudge(&far, &anywhere, &[], f, Axis::X, true).delta.x - 885.0).abs() < 1e-9, "anywhere on the page it is found");
+    }
+}
