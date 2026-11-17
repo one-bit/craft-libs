@@ -86,7 +86,9 @@ pub enum Constraint {
         origin: Point,
         dir: Vec2,
     },
-    /// The box keeps its own width / height = `ratio`, about the fixed corner or side, or about its centre.
+    /// The box has width / height = `ratio`, about the fixed corner or side, or about its centre: the dragged box is brought to the smallest
+    /// box of that ratio that holds it (the other axis of a side handle grows about its middle) and the scale is solved from there. A `ratio` that
+    /// is not finite or not above 0 is refused as not finite.
     Aspect {
         ratio: f64,
         about: About,
@@ -105,7 +107,7 @@ pub enum Constraint {
 pub enum Rounding {
     None,
     /// The distance moved from `from` (the reference point at the press: the point, or a box's centre) is a whole number of steps per page
-    /// axis. A step of 0 or not finite leaves that axis alone.
+    /// axis. A step of 0 or not finite leaves that axis alone. A nudge goes to its target or by its step and is not rounded.
     Delta {
         step: Vec2,
         from: Point,

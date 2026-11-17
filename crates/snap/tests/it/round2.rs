@@ -689,3 +689,51 @@ mod marks_and_lattices_in_the_corners {
         assert_eq!(r.work.pieces, 3 * 5_001, "three paths of 5,001 elements fit in 16,384; the fourth is not read");
     }
 }
+
+mod resize_roundings {
+    use craft_snap::{About, Constraint, Edges, Rounding, TurnedBox};
+
+    use super::*;
+
+    /// A resize of `f` by `moving` under a constraint and a rounding, in a scene of nothing, so that only the rounding moves it.
+    fn resize(f: TurnedBox, moving: Edges, c: Constraint, r: Rounding) -> (craft_snap::Snapped, craft_snap::Snapped, String) {
+        let t = scene(&[], &[], &[]);
+        let s = Settings::default();
+        let q = craft_snap::Query { constraint: c, rounding: r, ..query(Subject::Edges { frame: f, moving }, &s) };
+        let out = run(&t, &q);
+        let plain = run(&t, &craft_snap::Query { rounding: Rounding::None, ..q.clone() });
+        let verdict = out.check(&t, &q).err().map_or(String::new(), |b| format!("{b:?}"));
+        (out, plain, verdict)
+    }
+
+    #[test]
+    fn every_constraint_under_every_rounding_lands_on_the_lattice_unturned_and_turned() {
+        let roundings = [Rounding::Position(Vec2::new(1.0, 1.0)), Rounding::Delta { step: Vec2::new(1.0, 1.0), from: Point::new(0.3, 0.2) }];
+        let constraints = [
+            Constraint::None,
+            Constraint::Centre,
+            Constraint::Aspect { ratio: 2.0, about: About::Fixed },
+            Constraint::Aspect { ratio: 2.0, about: About::Centre },
+        ];
+        let sides = [
+            Edges { u_max: true, ..Edges::default() },
+            Edges { v_min: true, ..Edges::default() },
+            Edges { u_max: true, v_max: true, ..Edges::default() },
+            Edges { u_min: true, v_min: true, ..Edges::default() },
+        ];
+        let mut changed = 0;
+        for angle in [0.0, std::f64::consts::FRAC_PI_2, 0.5] {
+            for r in roundings {
+                for c in constraints {
+                    for m in sides {
+                        let f = frame(2.3, 1.1, 8.2, 5.7, angle);
+                        let (out, plain, verdict) = resize(f, m, c, r);
+                        assert_eq!(verdict, "", "{angle} {r:?} {c:?} {m:?}: {out:?}");
+                        changed += usize::from(out.frame != plain.frame);
+                    }
+                }
+            }
+        }
+        assert!(changed > 40, "the roundings moved the results: only {changed} of 96 changed");
+    }
+}
