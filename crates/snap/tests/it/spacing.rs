@@ -332,3 +332,156 @@ mod neighbour_gaps {
         assert_eq!(lands(SpacingGaps::Row, -49.6).map(|x| x.round()), Some(-50.0));
     }
 }
+
+mod rows_everywhere {
+    use craft_snap::{Axis, Constraint, NudgeReach, SpacingRow, Subject};
+    use kurbo::Point;
+
+    use super::*;
+
+    /// Only the gaps pull: every other kind is off.
+    fn only_gaps() -> Settings {
+        let mut s = wide();
+        for k in [
+            Kind::Guide,
+            Kind::Corner,
+            Kind::SideMiddle,
+            Kind::Size,
+            Kind::Angle,
+            Kind::Edge,
+            Kind::Centre,
+            Kind::Vertex,
+            Kind::Midpoint,
+            Kind::Nearest,
+            Kind::Intersection,
+        ] {
+            let mut rule = s.kinds.rule(k);
+            rule.on = false;
+            s.kinds.set(k, rule);
+        }
+        s
+    }
+
+    fn settings(row: SpacingRow) -> Settings {
+        Settings { spacing_row: row, ..only_gaps() }
+    }
+
+    fn spacing_hit(r: &craft_snap::Snapped) -> bool {
+        r.hits.iter().any(|h| h.kind == Kind::Spacing)
+    }
+
+    #[test]
+    fn a_row_left_of_the_origin_is_read_whole_and_so_is_one_after_the_box() {
+        let s = wide();
+        // Two boxes with a gap of 20, and the box 20 after them: all of them at negative coordinates.
+        let t = scene(&[(1, frame(-75.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(-45.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let q = query(box_subject(frame(-15.0 + 0.3, 0.0, 10.0, 10.0, 0.0)), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(spacing_hit(&r) && (r.frame.unwrap().centre.x + 15.0).abs() < 1e-9, "{:?} {:?}", r.hits, r.frame);
+        // The box before the row, the gap repeated before its first box.
+        let t = scene(&[(1, frame(55.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(85.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let q = query(box_subject(frame(25.0 + 0.3, 0.0, 10.0, 10.0, 0.0)), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(spacing_hit(&r) && (r.frame.unwrap().centre.x - 25.0).abs() < 1e-9, "{:?} {:?}", r.hits, r.frame);
+    }
+
+    #[test]
+    fn a_shape_that_is_turned_is_a_neighbour_in_a_row_along_the_page() {
+        // The first box is turned, so the box round it is 7.5 wide; the gap to the second is 21.25 and the box 21.25 after the second repeats it.
+        let turned = frame(5.0, 0.0, 6.0, 6.0, 0.3);
+        let b = turned.bounds();
+        let gap = 30.0 - b.x1;
+        let t = scene(&[(1, turned), (2, frame(35.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let s = wide();
+        let q = query(box_subject(frame(40.0 + gap + 5.0 + 0.3, 0.0, 10.0, 10.0, 0.0)), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(spacing_hit(&r), "{:?}", r.hits);
+        assert!((r.frame.unwrap().centre.x - (40.0 + gap + 5.0)).abs() < 1e-9, "{:?}", r.frame);
+    }
+
+    #[test]
+    fn a_box_that_touches_the_subject_is_its_neighbour_on_either_side_in_either_kind_of_row() {
+        for row in [SpacingRow::Band, SpacingRow::Linked] {
+            let s = settings(row);
+            // Gaps of 3 at the left and the subject touching the second box: it repeats the gap of 3 and moves 3 on.
+            let t = scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(18.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
+            let q = query(box_subject(frame(28.0, 0.0, 10.0, 10.0, 0.0)), &s);
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            assert!(spacing_hit(&r) && (r.frame.unwrap().centre.x - 31.0).abs() < 1e-9, "{row:?}: {:?} {:?}", r.hits, r.frame);
+            // The same on the other side: the subject touching the first box of a row after it.
+            let t = scene(&[(1, frame(105.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(118.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
+            let q = query(box_subject(frame(95.0, 0.0, 10.0, 10.0, 0.0)), &s);
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            assert!(spacing_hit(&r) && (r.frame.unwrap().centre.x - 92.0).abs() < 1e-9, "{row:?}: {:?} {:?}", r.hits, r.frame);
+        }
+    }
+
+    #[test]
+    fn a_box_that_touches_another_is_not_stepped_over_to_make_a_gap_beyond_it() {
+        // 0 to 10, a box touching it from 10 to 30, and one from 50 to 60: the gaps are 0 and 20, and not 40.
+        let t =
+            scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(20.0, 0.0, 20.0, 10.0, 0.0)), (3, frame(55.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let s = wide();
+        let at = |left: f64| {
+            let q = query(box_subject(frame(left + 5.0, 0.0, 10.0, 10.0, 0.0)), &s);
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            r
+        };
+        let forty = at(100.3);
+        assert!(!spacing_hit(&forty), "a gap of 40 is not in the row: {:?}", forty.hits);
+        let twenty = at(80.3);
+        assert!(spacing_hit(&twenty) && (twenty.frame.unwrap().centre.x - 5.0 - 80.0).abs() < 1e-9, "{:?}", twenty.hits);
+    }
+
+    #[test]
+    fn a_box_moving_along_a_ray_repeats_a_gap_by_the_travel_the_ray_needs() {
+        // The row's gap is 20 along x, the ray is 45 degrees up: the box has to travel 2.83 along it to move 2 across. Only the gaps pull.
+        let s = only_gaps();
+        let t = scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(35.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let q = craft_snap::Query {
+            constraint: Constraint::Ray { origin: Point::new(58.0, 0.0), dir: kurbo::Vec2::new(1.0, 1.0) },
+            ..query(box_subject(frame(63.0, 5.0, 10.0, 10.0, 0.0)), &s)
+        };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(spacing_hit(&r), "{:?}", r.hits);
+        assert!((r.frame.unwrap().centre.x - 65.0).abs() < 1e-9 && (r.frame.unwrap().centre.y - 7.0).abs() < 1e-9, "{:?}", r.frame);
+    }
+
+    #[test]
+    fn a_nudge_stops_where_the_box_would_repeat_a_gap_ahead_of_it_and_behind_it() {
+        let t = scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(35.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
+        let s = wide();
+        let nudge = |left: f64, forward: bool| {
+            let q = query(
+                Subject::Nudge {
+                    frame: frame(left + 5.0, 0.0, 10.0, 10.0, 0.0),
+                    bounds: None,
+                    axis: Axis::X,
+                    forward,
+                    reach: NudgeReach::Anywhere,
+                    fallback: 1.0,
+                },
+                &s,
+            );
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            r
+        };
+        // At 45 the next place ahead that repeats the gap of 20 is 60.
+        let ahead = nudge(45.0, true);
+        assert!(spacing_hit(&ahead) && (ahead.delta.x - 15.0).abs() < 1e-9, "{:?} {:?}", ahead.hits, ahead.delta);
+        // At 75 the place behind is 60.
+        let behind = nudge(75.0, false);
+        assert!(spacing_hit(&behind) && (behind.delta.x + 15.0).abs() < 1e-9, "{:?} {:?}", behind.hits, behind.delta);
+        // On the place already, the next press goes to the next one, and with none the fallback.
+        let on = nudge(60.0, true);
+        assert!(!spacing_hit(&on) && (on.delta.x - 1.0).abs() < 1e-9, "{:?} {:?}", on.hits, on.delta);
+    }
+}
