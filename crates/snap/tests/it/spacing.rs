@@ -253,3 +253,38 @@ fn an_object_whose_end_is_exactly_the_reach_from_the_box_is_a_neighbour() {
     assert!(r.hits.iter().any(|h| h.kind == Kind::Spacing), "{:?}", r.hits);
     assert_eq!(r.marks.iter().filter(|m| matches!(m, Mark::Gap { .. })).count(), 2, "{:?}", r.marks);
 }
+
+#[test]
+fn a_chained_row_reaches_an_object_whose_far_edge_is_exactly_the_reach_across_on_either_side() {
+    // A staircase going away across the page: the nearest box overlaps the subject's band, the next overlaps that one, and the last overlaps the second
+    // and ends across at exactly the reach (120) from the band. Its gap of 20 to the second is the gap the subject repeats from the nearest.
+    let s =
+        Settings { spacing_row: craft_snap::SpacingRow::Linked, spacing_reach: SpacingReach { times: 4.0, at_least: 120.0 }, ..Settings::default() };
+    let stairs = [
+        // Below the band (across smaller): the last ends at -120.
+        [(1, frame(90.0, -3.0, 10.0, 10.0, 0.0)), (2, frame(40.0, -73.0, 20.0, 134.0, 0.0)), (3, frame(5.0, -125.0, 10.0, 10.0, 0.0))],
+        // Above it: the last starts at 130, which is 120 past the band's 10.
+        [(1, frame(90.0, 13.0, 10.0, 10.0, 0.0)), (2, frame(40.0, 83.0, 20.0, 134.0, 0.0)), (3, frame(5.0, 135.0, 10.0, 10.0, 0.0))],
+    ];
+    for objs in stairs {
+        let t = scene(&objs, &[], &[]);
+        let q = query(box_subject(frame(120.0, 5.0, 10.0, 10.0, 0.0)), &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(r.hits.iter().any(|h| h.kind == Kind::Spacing), "{objs:?}: {:?}", r.hits);
+        assert_eq!(r.marks.iter().filter(|m| matches!(m, Mark::Gap { .. })).count(), 2, "{:?}", r.marks);
+    }
+}
+
+#[test]
+fn a_box_that_ends_exactly_where_the_next_starts_fills_the_gap_a_box_before_it_would_make() {
+    // The first box ends at 10 and the third starts at 30, but the second, which starts inside the first, ends at 30: there is no gap of 20 between them.
+    let objs = [(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(17.5, 0.0, 25.0, 10.0, 0.0)), (3, frame(35.0, 0.0, 10.0, 10.0, 0.0))];
+    let t = scene(&objs, &[], &[]);
+    let s = wide();
+    // The box at 60.3 would repeat a gap of 20 from the third box's end at 40, if there were one.
+    let q = query(box_subject(frame(65.3, 0.0, 10.0, 10.0, 0.0)), &s);
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap();
+    assert!(!r.hits.iter().any(|h| h.kind == Kind::Spacing) && !r.marks.iter().any(|m| matches!(m, Mark::Gap { .. })), "{:?} {:?}", r.hits, r.marks);
+}

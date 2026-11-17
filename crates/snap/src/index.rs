@@ -913,4 +913,19 @@ mod tests {
         ids.sort_unstable();
         assert_eq!(ids, vec![18, 19, 20, 21, 22]);
     }
+
+    #[test]
+    fn a_thin_window_visits_only_the_buckets_in_it_and_not_the_rest_of_the_rings() {
+        // Three rows of forty-one boxes, one to a bucket, and a window over the middle row only.
+        let items: Vec<Cell> = (0..123u64).map(|i| cell(i, (i % 41) as f64 * 2.0 + 0.5, (i / 41) as f64 * 2.0 + 0.5, 1.0, 1.0)).collect();
+        let g = Grid::build(items);
+        assert_eq!(g.cell, 2.0);
+        let found = g.gather(&Rect::new(0.0, 2.0, 81.9, 3.9), 1000, 100_000);
+        assert_eq!(found.items.len(), 41);
+        assert_eq!(found.visited, 41, "no bucket outside the window is looked in");
+        assert!(!found.cut);
+        // The same for a thin column.
+        let found = g.gather(&Rect::new(40.0, 0.0, 41.9, 5.9), 1000, 100_000);
+        assert_eq!((found.items.len(), found.visited), (3, 3));
+    }
 }
