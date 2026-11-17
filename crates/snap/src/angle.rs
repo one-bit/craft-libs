@@ -1,3 +1,7 @@
+// Rotation match follows DesignCraft's `match_rotation`: storytold/designcraft at 47ef1ec411d53e98a31c576d80a1d0e20ef5eb04, crates/tools/src/snap.rs.
+// Copyright (c) 2026 ArtCraft Team and the DesignCraft contributors. MIT OR Apache-2.0.
+// Changed: objects' angles are in a sorted array searched with wrap-around, the period is a setting, and a returned angle is always a finite number.
+
 //! Rotation match and angle steps, for a turn by a handle.
 //!
 //! * **Rotation match.** Other objects' angles, folded into one period, sit in a sorted array searched by bisection with wrap-around. A candidate

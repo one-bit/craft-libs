@@ -1,3 +1,7 @@
+// A plain target set built at the press, with a span on every target, follows PhotoCraft's `SnapTargets`: storytold/photocraft at
+// 957b10cccbb4bcd402394d250e52a9b9e1b63d74, crates/engine/src/snap.rs. Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors. MIT OR Apache-2.0.
+// Changed: objects carry turned frames, indexes are made on first need, and the build is order-free and capped.
+
 //! The target set: built once per gesture, and read by every query.
 //!
 //! `build` only stores and sorts. Each index is made the first time a query needs it, and the work report says which ones a query made, so an

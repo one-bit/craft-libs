@@ -1,3 +1,7 @@
+// Priority only on ties, and the bias of a place against a pair of lines, follow EffectCraft's `better` and `POINT_BIAS`: storytold/effectcraft at
+// 60e2cbbbe3d73c0a9074c25a1a615ccfec18721c, crates/engine/src/viewer.rs. Copyright (c) 2026 ArtCraft Team and the EffectCraft contributors. MIT OR Apache-2.0.
+// Changed: up to four directions are paired, constraints and roundings are solved inside the choice, and a candidate is checked on the geometry it lands on.
+
 //! A move: a point, or a box whose sides snap in up to four directions (the page's and its own), with a constraint and a rounding solved
 //! inside the snap.
 //!

@@ -1,3 +1,9 @@
+// Sorted lines searched by bisection follow VectorCraft: storytold/vectorcraft at 9a01d266b0438f96608c9f75b51437f912587d22, crates/tools/src/guides/targets.rs.
+// Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
+// The bucket grid with a list of wide entries and its test against a scan follow PDFCraft: storytold/pdfcraft at efd265563edfe1b5a3261b184fbc4c83f67f4364,
+// crates/measure/src/snap.rs. Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors. MIT OR Apache-2.0.
+// Changed: per direction (any angle) and per kind, equal places grouped with their members, buckets visited from the middle outward, every cap counted.
+
 //! The indexes of a target set.
 //!
 //! * **Lines** sorted by direction, then by kind, then by offset, with equal places grouped into one entry that keeps the union of their

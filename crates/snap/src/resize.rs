@@ -1,3 +1,9 @@
+// Resize along a box's own axes follows VectorCraft's `snap_scale`: storytold/vectorcraft at 9a01d266b0438f96608c9f75b51437f912587d22,
+// crates/tools/src/guides/targets.rs. Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
+// Size match follows DesignCraft's `pass_dimensions` and `length_edge_delta`: storytold/designcraft at 47ef1ec411d53e98a31c576d80a1d0e20ef5eb04,
+// crates/tools/src/snap.rs. Copyright (c) 2026 ArtCraft Team and the DesignCraft contributors. MIT OR Apache-2.0.
+// Changed: every moving side, half-size and scale is one degree of a general solve, and a candidate is checked on the final extents.
+
 //! A resize, or the dragged corner of a draw: sides that move along the box's own axes, in a turned frame as well as the page's.
 //!
 //! Each free degree is one parameter `g`: the travel of a moving side, the growth of a half-size when opposite sides move together, or the
