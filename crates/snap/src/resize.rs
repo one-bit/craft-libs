@@ -32,6 +32,14 @@ struct Ext {
     b1: f64,
 }
 
+impl Ext {
+    /// Whether it is a box with some size on both axes: more than the same-place rule can tell from nothing, for a box that has gone to nothing
+    /// by its own arithmetic is left a few millionths of a unit wide far from the origin.
+    fn sized(&self, co: &crate::frame::Coincide) -> bool {
+        self.a1 - self.a0 > co.tol(self.a1, self.a0) && self.b1 - self.b0 > co.tol(self.b1, self.b0)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SideId {
     UMin,
@@ -66,10 +74,9 @@ impl DegKind {
         }
     }
 
-    /// Whether the extents it gives are a box with some size on both axes.
-    fn valid(&self, e: Ext, g: f64) -> bool {
-        let n = self.apply(e, g);
-        g.is_finite() && n.a1 - n.a0 > 0.0 && n.b1 - n.b0 > 0.0
+    /// Whether the extents it gives are a box with some size on both axes: more than the same-place rule can tell from nothing.
+    fn valid(&self, co: &crate::frame::Coincide, e: Ext, g: f64) -> bool {
+        g.is_finite() && self.apply(e, g).sized(co)
     }
 }
 
@@ -237,7 +244,7 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
             for f in lines_near(cx, a, s, label) {
                 let g = (f.c - s) / nw;
                 let travel = g.abs() * w.hypot();
-                if !g.is_finite() || !cx.pulls(f.kind, travel) || !deg.kind.valid(own.ext, g) {
+                if !g.is_finite() || !cx.pulls(f.kind, travel) || !deg.kind.valid(&cx.co, own.ext, g) {
                     continue;
                 }
                 out.push(Cand {
@@ -305,7 +312,7 @@ fn size_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree) -> Vec<Cand> {
             let Some(m) = nearest_length(arr, len) else { continue };
             let g = (m.length - len) / rate;
             let travel = g.abs() * per_g;
-            if !(g.is_finite() && cx.pulls(Kind::Size, travel) && deg.kind.valid(own.ext, g)) {
+            if !(g.is_finite() && cx.pulls(Kind::Size, travel) && deg.kind.valid(&cx.co, own.ext, g)) {
                 continue;
             }
             out.push(Cand {
@@ -438,8 +445,7 @@ fn round_values(cx: &Ctx<'_>, own: &Own, degs: &[Degree], values: &[f64]) -> Vec
     }
     let fin = applied(degs, own, &out);
     let raw = own.ext;
-    let valid = fin.a1 > fin.a0 && fin.b1 > fin.b0;
-    if out.iter().all(|v| v.is_finite()) && (valid || !(raw.a1 > raw.a0 && raw.b1 > raw.b0)) { out } else { values.to_vec() }
+    if out.iter().all(|v| v.is_finite()) && (fin.sized(&cx.co) || !raw.sized(&cx.co)) { out } else { values.to_vec() }
 }
 
 /// Solves a small system given as its augmented matrix, by elimination with the largest pivot. `None` for a system that is singular or has
@@ -490,7 +496,7 @@ pub(crate) fn solve_edges(cx: &mut Ctx<'_>, _detail: &mut dyn Detail, frame: Tur
     loop {
         let values = round_values(cx, &own, &degs, &lists.iter().map(|l| l.first().map_or(0.0, |c| c.d)).collect::<Vec<f64>>());
         let fin = applied(&degs, &own, &values);
-        let collapsed = own.ext.a1 > own.ext.a0 && own.ext.b1 > own.ext.b0 && !(fin.a1 > fin.a0 && fin.b1 > fin.b0);
+        let collapsed = own.ext.sized(&cx.co) && !fin.sized(&cx.co);
         let bad = if collapsed {
             lists.iter().rposition(|l| !l.is_empty())
         } else {

@@ -2,7 +2,7 @@
 //! No test here reads a clock.
 
 use craft_snap::{
-    Anchors, Axis, Budget, Constraint, Id, Kind, Limits, Matching, Object, Parts, Settings, SpacingReach, Subject, Targets, TargetsBuilder,
+    Anchors, Axis, Budget, Constraint, Edges, Id, Kind, Limits, Matching, Object, Parts, Settings, SpacingReach, Subject, Targets, TargetsBuilder,
 };
 use kurbo::Point;
 
@@ -401,5 +401,26 @@ fn a_point_a_billion_from_the_origin_snaps_to_a_turned_objects_place_and_marks_i
         assert_eq!(r.hits.iter().map(|h| (h.kind, h.id)).collect::<Vec<_>>(), near.hits.iter().map(|h| (h.kind, h.id)).collect::<Vec<_>>(), "{far}");
         assert_eq!(r.marks.len(), near.marks.len(), "{far}: {:?}", r.marks);
         assert!((r.delta - near.delta).hypot() < 1e-9 + far * 4.0e-15, "{far}: {:?} {:?}", r.delta, near.delta);
+    }
+}
+
+#[test]
+fn a_resize_that_would_leave_no_height_is_not_left_a_few_millionths_high_far_from_the_origin() {
+    // Both sides of a turned box are dragged and the one guide runs through the box: each side alone may take it, together they leave nothing.
+    // Far from the origin the arithmetic leaves a sliver where near it leaves none, and the sliver is no box.
+    let s = Settings::default();
+    let run_at = |far: f64| {
+        let t = scene(&[], &[far], &[]);
+        let f = frame(1.5 + far, -0.5 - far * 0.5, 3.5, 1.5, 0.3);
+        let q = query(Subject::Edges { frame: f, moving: Edges { v_min: true, v_max: true, ..Edges::default() } }, &s);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{far}: {b:?}"));
+        r.frame.unwrap()
+    };
+    let near = run_at(0.0);
+    assert!(near.size.height > 1.0, "{near:?}");
+    for far in [1.0e3, 1.0e6, 1.0e9, 1.0e11] {
+        let f = run_at(far);
+        assert!((f.size.height - near.size.height).abs() < 1e-3 + far * 1.0e-14, "{far}: {f:?} against {near:?}");
     }
 }

@@ -387,7 +387,8 @@ fn resized(snapped: &Snapped, q: &Query<'_>, t: &Targets) -> Result<(), Broken> 
         [cu - 0.5 * b.size.width, cu + 0.5 * b.size.width, cv - 0.5 * b.size.height, cv + 0.5 * b.size.height]
     };
     let (before, after) = (ext(&frame), ext(&f));
-    if frame.size.width > 0.0 && frame.size.height > 0.0 && (f.size.width <= 0.0 || f.size.height <= 0.0) {
+    let tiny = |len: f64| len <= co.tol(len, 0.0);
+    if !tiny(frame.size.width) && !tiny(frame.size.height) && (tiny(f.size.width) || tiny(f.size.height)) {
         return broken("a resize collapsed or flipped the box", f);
     }
     let flags = [moving.u_min, moving.u_max, moving.v_min, moving.v_max];
