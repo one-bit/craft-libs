@@ -431,3 +431,26 @@ mod gaps_of_path_boxes {
         assert!(g.is_some_and(|g| (g - 2.5).abs() < 1e-9), "{g:?} {out:?}");
     }
 }
+
+mod wide_boxes {
+    use craft_snap::TurnedBox;
+
+    use super::*;
+
+    #[test]
+    fn a_pointer_over_a_small_box_finds_it_among_thousands_of_wide_ones_far_away_and_pays_for_what_it_is_near() {
+        let s = Settings::default();
+        let mut objs: Vec<(u64, TurnedBox)> =
+            (0..5_000u64).map(|i| (10_000 + i, frame(-150.0 + (i % 100) as f64 * 3.0, -75.0 + (i / 100) as f64 * 3.0, 1.0, 1.0, 0.0))).collect();
+        objs.push((1, frame(0.0, 0.0, 1.0, 1.0, 0.0)));
+        // 4,200 boxes 40 wide and one deep, far from the pointer, each over more than sixteen of the buckets of the small ones.
+        objs.extend((0..4_200u64).map(|i| (100 + i, frame(1_000.0 + i as f64 * 50.0, 1_000.0 + i as f64 * 50.0, 40.0, 1.0, 0.0))));
+        let t = scene(&objs, &[], &[]);
+        let q = query(Subject::Point { at: Point::new(1.2, 0.5), base: None }, &s);
+        let out = run(&t, &q);
+        out.check(&t, &q).unwrap();
+        assert!(out.hits.iter().any(|h| h.id == Some(craft_snap::Id(1))), "the box under the pointer is looked at: {out:?}");
+        // Each gather pays for the buckets it is over, not for the wide boxes there are: of the order of a hundred, where it was 6 x 4,000.
+        assert!(out.work.visited < 400, "{}", out.work.visited);
+    }
+}

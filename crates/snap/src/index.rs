@@ -10,8 +10,11 @@
 //!   spans and their count. The nearest line to a side is one of the two entries beside its insertion point, whatever the array holds.
 //!   (Sorted arrays and the test that bisection equals a scan come from VectorCraft; see the README.)
 //! * **A bucket grid** of boxes, visited from the middle of a window outward, so that when the visits run out it is the boxes farthest from the
-//!   pointer that are left out, and not the ones under it. A box that covers more than [`MAX_BUCKETS_PER_BOX`] buckets is on a list every
-//!   window looks at, each entry a visit. (The grid with a list of wide entries, and its test against a scan, follow PDFCraft's.)
+//!   pointer that are left out, and not the ones under it. A box that covers more than [`MAX_BUCKETS_PER_BOX`] buckets is put in a coarser grid
+//!   instead, one whose buckets are sixteen times as wide, and so on up, so a window looks at the coarse buckets it meets and not at every wide box
+//!   there is; the grids are visited from the finest up, so the small boxes under the pointer are looked at before the wide ones that cover it. Only
+//!   a box too wide for the coarsest grid is on a list every window looks at, last, each entry a visit. (The grid with a list of wide entries, and its
+//!   test against a scan, follow PDFCraft's.)
 //! * **Sorted arrays** of lengths and angles.
 
 use std::collections::{HashMap, HashSet};
@@ -318,13 +321,28 @@ pub(crate) struct Gather<'a> {
     pub cut: bool,
 }
 
-/// A bucket grid of boxes in a frame whose origin is `origin`.
+/// How many times as wide a bucket of the next coarser grid is.
+const COARSEN: f64 = 16.0;
+
+/// How many grids there are at most: a box that does not fit the coarsest in [`MAX_BUCKETS_PER_BOX`] buckets is on the list of the widest.
+const MAX_LEVELS: usize = 14;
+
+/// One grid of buckets, all of one width.
+#[derive(Debug)]
+struct Level {
+    cell: f64,
+    buckets: HashMap<(i64, i64), Vec<u32>>,
+}
+
+/// A bucket grid of boxes in a frame whose origin is `origin`, with coarser grids for the boxes too wide for it.
 #[derive(Debug)]
 pub(crate) struct Grid {
     cell: f64,
     items: Vec<Cell>,
-    buckets: HashMap<(i64, i64), Vec<u32>>,
+    levels: Vec<Level>,
     big: Vec<u32>,
+    /// How many boxes are in a grid coarser than the finest.
+    coarse: usize,
 }
 
 fn bucket_of(v: f64, cell: f64) -> i64 {
@@ -357,7 +375,7 @@ impl Grid {
         sides.sort_by(f64::total_cmp);
         let median = sides.get(sides.len() / 2).copied().unwrap_or(0.5);
         let cell = (2.0 * median).max(f64::MIN_POSITIVE.sqrt());
-        let mut grid = Grid { cell, items: Vec::new(), buckets: HashMap::new(), big: Vec::new() };
+        let mut grid = Grid { cell, items: Vec::new(), levels: Vec::new(), big: Vec::new(), coarse: 0 };
         for item in items {
             grid.insert(item);
         }
@@ -366,17 +384,35 @@ impl Grid {
 
     fn insert(&mut self, item: Cell) {
         let Ok(number) = u32::try_from(self.items.len()) else { return };
-        let (x0, x1) = (bucket_of(item.bounds.x0, self.cell), bucket_of(item.bounds.x1, self.cell));
-        let (y0, y1) = (bucket_of(item.bounds.y0, self.cell), bucket_of(item.bounds.y1, self.cell));
-        let count = (x1 - x0 + 1).saturating_mul(y1 - y0 + 1);
-        if count > MAX_BUCKETS_PER_BOX {
-            self.big.push(number);
-        } else {
-            for bx in x0..=x1 {
-                for by in y0..=y1 {
-                    self.buckets.entry((bx, by)).or_default().push(number);
-                }
+        let mut cell = self.cell;
+        let mut placed = false;
+        for level in 0..MAX_LEVELS {
+            if !cell.is_finite() {
+                break;
             }
+            let (x0, x1) = (bucket_of(item.bounds.x0, cell), bucket_of(item.bounds.x1, cell));
+            let (y0, y1) = (bucket_of(item.bounds.y0, cell), bucket_of(item.bounds.y1, cell));
+            let count = (x1 - x0 + 1).saturating_mul(y1 - y0 + 1);
+            if count <= MAX_BUCKETS_PER_BOX {
+                while self.levels.len() <= level {
+                    let width = self.cell * COARSEN.powi(i32::try_from(self.levels.len()).unwrap_or(0));
+                    self.levels.push(Level { cell: width, buckets: HashMap::new() });
+                }
+                if let Some(grid) = self.levels.get_mut(level) {
+                    for bx in x0..=x1 {
+                        for by in y0..=y1 {
+                            grid.buckets.entry((bx, by)).or_default().push(number);
+                        }
+                    }
+                    placed = true;
+                    self.coarse += usize::from(level > 0);
+                }
+                break;
+            }
+            cell *= COARSEN;
+        }
+        if !placed {
+            self.big.push(number);
         }
         self.items.push(item);
     }
@@ -393,9 +429,15 @@ impl Grid {
         &self.items
     }
 
-    /// How many boxes are on the list every window looks at.
+    /// How many boxes are too wide for the finest grid: in a coarser one, or on the list every window looks at.
     #[cfg(test)]
     pub fn big_len(&self) -> usize {
+        self.coarse + self.big.len()
+    }
+
+    /// How many boxes are on the list every window looks at.
+    #[cfg(test)]
+    pub fn listed_len(&self) -> usize {
         self.big.len()
     }
 
@@ -403,9 +445,14 @@ impl Grid {
     /// visited. The buckets are visited in rings round the middle one.
     pub fn gather(&self, window: &Rect, limit: usize, visits: u64) -> Gather<'_> {
         let mut found = Found { visited: 0, examined: 0, cut: false, seen: HashSet::new(), hits: Vec::new(), cap: visits, window: *window };
-        let mut more = self.big.iter().all(|n| self.visit(*n, &mut found));
-        if more && [window.x0, window.y0, window.x1, window.y1].iter().all(|v| v.is_finite()) {
-            more = self.rings(window, &mut found);
+        // The finest grid first, then each coarser one, then the boxes too wide for any: the small boxes under the pointer are looked at before the wide
+        // ones that cover it, and a window meets the few coarse buckets it is over and not every wide box there is.
+        let mut more = true;
+        if [window.x0, window.y0, window.x1, window.y1].iter().all(|v| v.is_finite()) {
+            more = self.levels.iter().all(|level| self.rings(level, window, &mut found));
+        }
+        if more {
+            more = self.big.iter().all(|n| self.visit(*n, &mut found));
         }
         let _ = more;
         let mid = Point::new(0.5 * (window.x0 + window.x1), 0.5 * (window.y0 + window.y1));
@@ -417,10 +464,10 @@ impl Grid {
         Gather { items: hits.into_iter().map(|(_, c)| c).collect(), examined: found.examined, visited: found.visited, cut }
     }
 
-    /// Visits the buckets of the window in rings round its middle. Returns false when the visits ran out.
-    fn rings(&self, window: &Rect, found: &mut Found) -> bool {
-        let (mut x0, mut x1) = (bucket_of(window.x0, self.cell), bucket_of(window.x1, self.cell));
-        let (mut y0, mut y1) = (bucket_of(window.y0, self.cell), bucket_of(window.y1, self.cell));
+    /// Visits the buckets of the window in one grid, in rings round its middle. Returns false when the visits ran out.
+    fn rings(&self, level: &Level, window: &Rect, found: &mut Found) -> bool {
+        let (mut x0, mut x1) = (bucket_of(window.x0, level.cell), bucket_of(window.x1, level.cell));
+        let (mut y0, mut y1) = (bucket_of(window.y0, level.cell), bucket_of(window.y1, level.cell));
         for (lo, hi) in [(&mut x0, &mut x1), (&mut y0, &mut y1)] {
             if *hi - *lo + 1 > MAX_WINDOW_BUCKETS {
                 // Some of the window is not looked at: the answer says so.
@@ -437,7 +484,7 @@ impl Grid {
                 if bx < x0 || bx > x1 || by < y0 || by > y1 {
                     continue;
                 }
-                let Some(list) = self.buckets.get(&(bx, by)) else { continue };
+                let Some(list) = level.buckets.get(&(bx, by)) else { continue };
                 if !list.iter().all(|n| self.visit(*n, found)) {
                     return false;
                 }
@@ -928,5 +975,64 @@ mod tests {
         // The same for a thin column.
         let found = g.gather(&Rect::new(40.0, 0.0, 41.9, 5.9), 1000, 100_000);
         assert_eq!((found.items.len(), found.visited, found.examined), (3, 3, 3));
+    }
+
+    /// Small boxes in a block about the origin, so that the buckets are 2 wide.
+    fn block(first_id: u64) -> Vec<Cell> {
+        (0..5_000u64).map(|i| cell(first_id + i, -150.0 + (i % 100) as f64 * 3.0, -75.0 + (i / 100) as f64 * 3.0, 1.0, 1.0)).collect()
+    }
+
+    #[test]
+    fn wide_boxes_far_from_the_window_are_not_visited_and_do_not_hide_the_box_under_it() {
+        // 4,200 boxes 40 wide, each at its own place well away from the pointer, and 5,000 small ones about it: the window at the pointer must look at the
+        // small box under it, and what it pays is the buckets it is over, not the wide boxes there are.
+        let mut items = block(10_000);
+        items.push(cell(1, 0.0, 0.0, 1.0, 1.0));
+        items.extend((0..4_200u64).map(|i| cell(100 + i, 1_000.0 + i as f64 * 50.0, 1_000.0 + i as f64 * 50.0, 40.0, 1.0)));
+        let g = Grid::build(items);
+        assert!(g.big_len() >= 4_200, "{}", g.big_len());
+        let found = g.gather(&Rect::new(0.2, 0.2, 0.8, 0.8), 64, 4_096);
+        assert!(found.items.iter().any(|c| c.id.0 == 1), "{found:?}");
+        assert!(found.visited < 50, "the wide boxes far away cost nothing: {}", found.visited);
+        assert!(!found.cut);
+    }
+
+    #[test]
+    fn a_crowd_of_wide_boxes_over_the_pointer_does_not_hide_the_small_box_under_it() {
+        let mut items = block(10_000);
+        items.push(cell(1, 0.0, 0.0, 1.0, 1.0));
+        items.extend((0..4_200u64).map(|i| cell(100 + i, -100.0, -100.0, 200.0 + i as f64 * 0.001, 200.0)));
+        let g = Grid::build(items);
+        let found = g.gather(&Rect::new(0.2, 0.2, 0.8, 0.8), 64, 4_096);
+        assert!(found.items.iter().any(|c| c.id.0 == 1), "{found:?}");
+        assert!(found.cut && found.visited <= 4_096, "the crowd uses up what is left and says so: {found:?}");
+    }
+
+    #[test]
+    fn a_box_too_wide_for_every_grid_is_on_the_list_and_still_found() {
+        let mut items = small(20, 10);
+        items.push(cell(1, -1.0e300, -1.0e300, 2.0e300, 2.0e300));
+        items.push(cell(2, 5.0, 5.0, 1.0, 1.0));
+        let g = Grid::build(items);
+        assert_eq!(g.listed_len(), 1);
+        let found = g.gather(&Rect::new(5.2, 5.2, 5.4, 5.4), 10, 4_096);
+        let mut ids: Vec<u64> = found.items.iter().map(|c| c.id.0).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [1, 2]);
+    }
+
+    #[test]
+    fn a_wide_box_is_in_the_grid_that_holds_it_in_sixteen_buckets_or_fewer() {
+        let items: Vec<Cell> = (0..20).map(|i| cell(i, 100.0 + i as f64 * 10.0, 100.0, 1.0, 1.0)).collect();
+        // Buckets 2 wide: widths 30 (16 buckets), 33 (17), 500 and 5,000,000 each in a coarser grid, and a window in each is found.
+        for (id, width) in [(100u64, 30.0), (101, 33.0), (102, 500.0), (103, 5.0e6), (104, 2.0e13)] {
+            let mut all = items.clone();
+            all.push(cell(id, 0.1, 0.1, width, 0.5));
+            let g = Grid::build(all);
+            assert_eq!(g.listed_len(), 0, "{width}");
+            let at = (0.1 + width * 0.999).min(1.0e13);
+            let found = g.gather(&Rect::new(at, 0.2, at + 0.1, 0.3), 10, 4_096);
+            assert!(found.items.iter().any(|c| c.id.0 == id), "{width}: {found:?}");
+        }
     }
 }
