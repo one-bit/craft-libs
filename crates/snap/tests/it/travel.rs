@@ -490,3 +490,278 @@ mod nudge {
         assert_eq!((r.delta.x, r.hits[0].kind, r.work.truncated), (10.0, Kind::Guide, false));
     }
 }
+
+/// The subject's places and the targets' places against a scan: for a held move and for a nudge, on a lattice where places meet lines by themselves,
+/// mirrored, moved a long way and turned by a quarter turn.
+mod against_a_scan {
+    use std::f64::consts::FRAC_PI_2;
+
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// Everything a scene is made of, to be mapped as a whole.
+    #[derive(Clone, Debug)]
+    struct Scene {
+        points: Vec<Point>,
+        objects: Vec<TurnedBox>,
+        subject: TurnedBox,
+        own: Vec<Point>,
+    }
+
+    impl Scene {
+        /// The scene moved by `f` and turned by `turn`: places go where `f` takes them, a box's centre too and its angle grows by `turn`.
+        fn mapped(&self, f: &dyn Fn(Point) -> Point, turn: f64) -> Scene {
+            let frame = |b: &TurnedBox| TurnedBox { centre: f(b.centre), size: b.size, angle: b.angle + turn };
+            Scene {
+                points: self.points.iter().map(|p| f(*p)).collect(),
+                objects: self.objects.iter().map(frame).collect(),
+                subject: frame(&self.subject),
+                own: self.own.iter().map(|p| f(*p)).collect(),
+            }
+        }
+
+        fn targets(&self) -> Targets {
+            let numbered: Vec<(u64, TurnedBox)> = self.objects.iter().enumerate().map(|(i, b)| (i as u64 + 100, *b)).collect();
+            let points: Vec<(u64, f64, f64)> = self.points.iter().enumerate().map(|(i, p)| (i as u64 + 1, p.x, p.y)).collect();
+            targets(&points, &numbered)
+        }
+    }
+
+    /// The nine places of a box, from the definition: its corners, the middles of its sides and its centre.
+    fn nine(b: &TurnedBox) -> Vec<Point> {
+        let (s, c) = b.angle.sin_cos();
+        let at = |u: f64, v: f64| {
+            Point::new(
+                b.centre.x + c * u * b.size.width * 0.5 - s * v * b.size.height * 0.5,
+                b.centre.y + s * u * b.size.width * 0.5 + c * v * b.size.height * 0.5,
+            )
+        };
+        let mut out = vec![];
+        for (u, v) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, 0.0)] {
+            out.push(at(u, v));
+        }
+        out
+    }
+
+    /// The places of the targets: the app's, and the corners and side middles (not the centre) of each object.
+    fn target_places(s: &Scene) -> Vec<Point> {
+        let mut out = s.points.clone();
+        for o in &s.objects {
+            out.extend(nine(o).into_iter().take(8));
+        }
+        out
+    }
+
+    /// The settings with only places on, all of one reach and one priority, so that the nearest is the one that wins and nothing else pulls.
+    fn only_places() -> Settings {
+        let mut s = on_line();
+        for k in [
+            Kind::Guide,
+            Kind::Edge,
+            Kind::Centre,
+            Kind::Spacing,
+            Kind::Size,
+            Kind::Angle,
+            Kind::Vertex,
+            Kind::Midpoint,
+            Kind::Nearest,
+            Kind::Intersection,
+            Kind::Frame,
+            Kind::Layout,
+        ] {
+            let mut r = s.kinds.rule(k);
+            r.on = false;
+            s.kinds.set(k, r);
+        }
+        for k in [Kind::Point(0), Kind::Corner, Kind::SideMiddle] {
+            s.kinds.set(k, craft_snap::KindRule { on: true, reach: craft_snap::Reach::Document(6.25), priority: 1, scope: craft_snap::Scope::All });
+        }
+        s
+    }
+
+    fn tol(a: f64, b: f64, far: f64) -> f64 {
+        (1e-9 + 16.0 * f64::EPSILON * far).max(8.0 * f64::EPSILON * a.abs().max(b.abs()))
+    }
+
+    fn far_of(s: &Scene) -> f64 {
+        let big = |p: &Point| p.x.abs().max(p.y.abs());
+        let mut m = 0.0f64;
+        for b in s.objects.iter().chain([&s.subject]) {
+            m = m.max(nine(b).iter().map(big).fold(0.0, f64::max));
+        }
+        m.max(s.points.iter().map(big).fold(0.0, f64::max)).max(s.own.iter().map(big).fold(0.0, f64::max))
+    }
+
+    /// The signed distances along the axis from a place of the subject to a place of the targets on the same line.
+    fn meetings(s: &Scene, axis: Axis, with_own: bool) -> Vec<f64> {
+        let far = far_of(s);
+        let mut mine = nine(&s.subject);
+        if with_own {
+            mine.extend(s.own.iter().copied());
+        }
+        let split = |p: &Point| if axis == Axis::X { (p.x, p.y) } else { (p.y, p.x) };
+        let mut out = vec![];
+        for q in &mine {
+            for g in target_places(s) {
+                let ((qa, qc), (ga, gc)) = (split(q), split(&g));
+                if (gc - qc).abs() <= tol(gc, qc, far) {
+                    out.push(ga - qa);
+                }
+            }
+        }
+        out
+    }
+
+    fn lattice() -> impl Strategy<Value = f64> {
+        (-16i32..16).prop_map(|v| f64::from(v) * 0.5)
+    }
+
+    fn a_box() -> impl Strategy<Value = TurnedBox> {
+        (lattice(), lattice(), 1i32..8, 1i32..8, prop_oneof![Just(0.0), Just(FRAC_PI_2), Just(0.5)]).prop_map(|(x, y, w, h, a)| TurnedBox {
+            centre: Point::new(x, y),
+            size: kurbo::Size::new(f64::from(w) * 0.5, f64::from(h) * 0.5),
+            angle: a,
+        })
+    }
+
+    fn scene() -> impl Strategy<Value = Scene> {
+        (
+            prop::collection::vec((lattice(), lattice()), 0..8),
+            prop::collection::vec(a_box(), 0..4),
+            a_box(),
+            prop::collection::vec((0usize..9, -12i32..12), 0..4),
+            prop::collection::vec((lattice(), lattice()), 0..3),
+        )
+            .prop_map(|(points, objects, subject, derived, own)| {
+                // Some points are put on the line of one of the subject's places, whatever the turn, so that a turned box has places on its lines too.
+                let mine = nine(&subject);
+                let mut points: Vec<Point> = points.iter().map(|(x, y)| Point::new(*x, *y)).collect();
+                for (i, dx) in derived {
+                    let p = mine[i];
+                    points.push(Point::new(p.x + f64::from(dx) * 0.5, p.y));
+                    points.push(Point::new(p.x, p.y + f64::from(dx) * 0.5));
+                }
+                Scene { points, objects, subject, own: own.iter().map(|(x, y)| Point::new(*x, *y)).collect() }
+            })
+    }
+
+    /// A held move along `axis`: the delta, checked.
+    fn held_delta(s: &Scene, axis: Axis) -> (Snapped, f64) {
+        let t = s.targets();
+        let st = only_places();
+        let q = Query {
+            constraint: Constraint::Axis(axis),
+            ..query(Subject::Box { frame: s.subject, bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &s.own }, &st)
+        };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+        let along = if axis == Axis::X { r.delta.x } else { r.delta.y };
+        (r, along)
+    }
+
+    /// A nudge: the signed travel along the axis, checked.
+    fn nudge_travel(s: &Scene, axis: Axis, forward: bool, reach: NudgeReach, fallback: f64) -> (Snapped, f64) {
+        let t = s.targets();
+        let st = only_places();
+        let q = query(Subject::Nudge { frame: s.subject, bounds: None, axis, forward, reach, fallback }, &st);
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+        let along = if axis == Axis::X { r.delta.x } else { r.delta.y };
+        (r, along)
+    }
+
+    /// The expected signed travel of a held move: the nearest meeting within the reach, or none. Ties at one distance on both sides are told by the
+    /// caller (two answers are right).
+    fn expected_held(s: &Scene, axis: Axis) -> Vec<f64> {
+        let far = far_of(s);
+        let within: Vec<f64> = meetings(s, axis, true).into_iter().filter(|d| d.abs() <= 6.25).collect();
+        let least = within.iter().map(|d| d.abs()).fold(f64::INFINITY, f64::min);
+        let mut best: Vec<f64> = Vec::new();
+        for d in within.into_iter().filter(|d| (d.abs() - least).abs() <= tol(least, least, far)) {
+            if !best.iter().any(|b| (b - d).abs() <= tol(d, *b, far)) {
+                best.push(d);
+            }
+        }
+        if best.is_empty() {
+            best.push(0.0);
+        }
+        best
+    }
+
+    /// The expected signed travel of a nudge: the nearest meeting strictly ahead within the reach, else the fallback.
+    fn expected_nudge(s: &Scene, axis: Axis, forward: bool, limit: f64, fallback: f64) -> f64 {
+        let far = far_of(s);
+        let sign = if forward { 1.0 } else { -1.0 };
+        let ahead =
+            meetings(s, axis, false).into_iter().map(|d| d * sign).filter(|t| *t > tol(*t, 0.0, far) && *t <= limit).fold(f64::INFINITY, f64::min);
+        sign * if ahead.is_finite() { ahead } else { fallback }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1500))]
+
+        #[test]
+        fn a_held_move_goes_to_the_nearest_place_on_a_line_its_places_travel_along(s in scene(), x_axis in any::<bool>()) {
+            let axis = if x_axis { Axis::X } else { Axis::Y };
+            let (r, got) = held_delta(&s, axis);
+            let far = far_of(&s);
+            let want = expected_held(&s, axis);
+            prop_assert!(want.iter().any(|w| (got - w).abs() <= tol(*w, got, far)), "got {} want one of {:?}\n{:?}\n{:?}", got, want, s, r);
+            let across = if axis == Axis::X { r.delta.y } else { r.delta.x };
+            prop_assert_eq!(across.to_bits(), 0.0f64.to_bits());
+            if !meetings(&s, axis, true).iter().any(|d| d.abs() <= 6.25) {
+                prop_assert!(r.hits.is_empty(), "no place on a line within reach: {:?}", r);
+            }
+        }
+
+        #[test]
+        fn a_nudge_goes_to_the_nearest_place_strictly_ahead_on_a_line_its_places_travel_along(
+            s in scene(), x_axis in any::<bool>(), forward in any::<bool>(), step in prop_oneof![Just(None), Just(Some(2.25f64)), Just(Some(7.75f64))],
+        ) {
+            let axis = if x_axis { Axis::X } else { Axis::Y };
+            let (reach, limit, fallback) = match step { None => (NudgeReach::Anywhere, f64::INFINITY, 0.75), Some(w) => (NudgeReach::Within(w), w, w) };
+            let (r, got) = nudge_travel(&s, axis, forward, reach, fallback);
+            let want = expected_nudge(&s, axis, forward, limit, fallback);
+            prop_assert!((got - want).abs() <= tol(want, got, far_of(&s)), "got {} want {}\n{:?}\n{:?}", got, want, s, r);
+        }
+
+        /// Mirrored along x, the same scene gives the mirrored result; moved a long way, the same; and turned by a quarter, the result turned.
+        #[test]
+        fn mirrored_moved_and_quarter_turned_scenes_give_the_same_result(
+            s in scene(), x_axis in any::<bool>(), forward in any::<bool>(), far in prop::sample::select(vec![1.0e3f64, 1.0e6, 1.0e9]),
+        ) {
+            let axis = if x_axis { Axis::X } else { Axis::Y };
+            // Held. Where two meetings are as near on either side, either is right, and a scene turned or mirrored may take the other.
+            let (_, base) = held_delta(&s, axis);
+            prop_assume!(expected_held(&s, axis).len() == 1);
+            let mirror = s.mapped(&|p| Point::new(-p.x, p.y), 0.0);
+            // A mirrored box is the same box, its angle negated: the frame of a mirrored scene turns the other way.
+            let mirror = Scene {
+                subject: TurnedBox { angle: -s.subject.angle, ..mirror.subject },
+                objects: mirror.objects.iter().zip(&s.objects).map(|(m, o)| TurnedBox { angle: -o.angle, ..*m }).collect(),
+                ..mirror
+            };
+            let (_, m) = held_delta(&mirror, axis);
+            let sign = if axis == Axis::X { -1.0 } else { 1.0 };
+            prop_assert!((m - sign * base).abs() <= 1e-9, "mirrored {} vs {}", m, base);
+            let moved = s.mapped(&|p| Point::new(p.x + far, p.y - far * 0.5), 0.0);
+            let (_, mv) = held_delta(&moved, axis);
+            prop_assert!((mv - base).abs() <= 1e-9 + far * 4e-15, "moved {} vs {}", mv, base);
+            // A quarter turn about the origin takes x to y: a hold along x becomes a hold along y.
+            let turn = s.mapped(&|p| Point::new(-p.y, p.x), FRAC_PI_2);
+            let (_, tu) = held_delta(&turn, axis.other());
+            let sign = if axis == Axis::X { 1.0 } else { -1.0 };
+            prop_assert!((tu - sign * base).abs() <= 1e-9, "turned {} vs {}", tu, base);
+            // Nudged.
+            let (_, n) = nudge_travel(&s, axis, forward, NudgeReach::Anywhere, 0.75);
+            let (_, nm) = nudge_travel(&mirror, axis, if axis == Axis::X { !forward } else { forward }, NudgeReach::Anywhere, 0.75);
+            prop_assert!((nm.abs() - n.abs()).abs() <= 1e-9, "mirrored nudge {} vs {}", nm, n);
+            // A quarter turn takes +x to +y and +y to -x.
+            let (_, nt) = nudge_travel(&turn, axis.other(), if axis == Axis::X { forward } else { !forward }, NudgeReach::Anywhere, 0.75);
+            prop_assert!((nt.abs() - n.abs()).abs() <= 1e-9, "turned nudge {} vs {}", nt, n);
+            let (_, nv) = nudge_travel(&moved, axis, forward, NudgeReach::Anywhere, 0.75);
+            prop_assert!((nv - n).abs() <= 1e-9 + far * 4e-15, "moved nudge {} vs {}", nv, n);
+        }
+    }
+}

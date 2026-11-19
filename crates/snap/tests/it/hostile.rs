@@ -3,8 +3,8 @@
 //! No test here asserts elapsed time in a default run. The `#[ignore]`d `timed_*` tests time each case beside a yardstick, back to back.
 
 use craft_snap::{
-    Axis, Budget, Constraint, Cuts, Edges, Id, Kind, Lattice, Limits, Mark, Object, Parts, Reach, Rounding, Settings, SpacingReach, Subject, Targets,
-    TargetsBuilder, TurnedBox, Work,
+    Axis, Budget, Constraint, Cuts, Edges, Id, Kind, Lattice, Limits, Mark, NudgeReach, Object, Parts, Reach, Rounding, Settings, SpacingReach,
+    Subject, Targets, TargetsBuilder, TurnedBox, Work,
 };
 use kurbo::Point;
 
@@ -383,33 +383,51 @@ mod caps {
             ),
             ("point", Subject::Point { at: Point::new(40.3, 33.1), base: None }, Constraint::None),
             ("locked move", box_subject(frame(40.3, 33.1, 3.0, 2.0, 0.0)), Constraint::Axis(Axis::X)),
+            ("locked turned move", box_subject(frame(40.3, 33.1, 3.0, 2.0, 0.4)), Constraint::Axis(Axis::Y)),
+            (
+                "nudge",
+                Subject::Nudge {
+                    frame: frame(40.3, 33.1, 3.0, 2.0, 0.0),
+                    bounds: None,
+                    axis: Axis::X,
+                    forward: true,
+                    reach: NudgeReach::Within(9.0),
+                    fallback: 9.0,
+                },
+                Constraint::None,
+            ),
         ]
     }
 
     #[test]
     fn a_cap_of_nothing_or_one_gives_a_result_that_checks_with_the_cut_set_exactly_where_the_work_was_asked_for() {
-        let (t, s) = (scene_of_everything(), settings());
+        let t = scene_of_everything();
         let mut exercised = std::collections::BTreeSet::new();
-        for (what, subject, constraint) in subjects() {
-            let base = craft_snap::Query { constraint, ..query(subject, &s) };
-            let full = run(&t, &base);
-            full.check(&t, &base).unwrap();
-            assert!(!full.work.cut.any() && !full.work.truncated, "{what}: the default caps are not met by this scene: {:?}", full.work);
-            for (name, set, counter, bit) in fields() {
-                for v in [0u32, 1] {
-                    let mut budget = Budget::default();
-                    set(&mut budget, v);
-                    let q = craft_snap::Query { budget, ..base.clone() };
-                    let r = run(&t, &q);
-                    r.check(&t, &q).unwrap_or_else(|b| panic!("{what} {name}={v}: {b:?} {:?}", r.work));
-                    assert_eq!(r.work.truncated, r.work.cut.any(), "{what} {name}={v}: {:?}", r.work);
-                    // The work the cap limits is never past the cap (windows and rows once for each window gathered).
-                    let allowed = u64::from(v).saturating_mul(craft_snap::MAX_GATHERS.max(1));
-                    assert!(counter(&r.work) <= allowed, "{what} {name}={v}: {:?}", r.work);
-                    // If the full run did the work, a cap of nothing stopped some of it, and says so.
-                    if v == 0 && counter(&full.work) > 0 {
-                        exercised.insert(name);
-                        assert!(r.work.cut.has(bit), "{what} {name}=0: {:?}", r.work);
+        // As an app that turns on the places a held move and a nudge meet is, and as one that does not.
+        for s in
+            [settings(), Settings { locked_places: craft_snap::TravelPlaces::OnLine, nudge_places: craft_snap::TravelPlaces::OnLine, ..settings() }]
+        {
+            for (what, subject, constraint) in subjects() {
+                let base = craft_snap::Query { constraint, ..query(subject, &s) };
+                let full = run(&t, &base);
+                full.check(&t, &base).unwrap();
+                assert!(!full.work.cut.any() && !full.work.truncated, "{what}: the default caps are not met by this scene: {:?}", full.work);
+                for (name, set, counter, bit) in fields() {
+                    for v in [0u32, 1] {
+                        let mut budget = Budget::default();
+                        set(&mut budget, v);
+                        let q = craft_snap::Query { budget, ..base.clone() };
+                        let r = run(&t, &q);
+                        r.check(&t, &q).unwrap_or_else(|b| panic!("{what} {name}={v}: {b:?} {:?}", r.work));
+                        assert_eq!(r.work.truncated, r.work.cut.any(), "{what} {name}={v}: {:?}", r.work);
+                        // The work the cap limits is never past the cap (windows and rows once for each window gathered).
+                        let allowed = u64::from(v).saturating_mul(craft_snap::MAX_GATHERS.max(1));
+                        assert!(counter(&r.work) <= allowed, "{what} {name}={v}: {:?}", r.work);
+                        // If the full run did the work, a cap of nothing stopped some of it, and says so.
+                        if v == 0 && counter(&full.work) > 0 {
+                            exercised.insert(name);
+                            assert!(r.work.cut.has(bit), "{what} {name}=0: {:?}", r.work);
+                        }
                     }
                 }
             }

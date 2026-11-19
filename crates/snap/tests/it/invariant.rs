@@ -15,8 +15,13 @@ fn object_frame() -> impl Strategy<Value = (f64, f64, f64, f64, f64)> {
 }
 
 fn settings() -> impl Strategy<Value = Settings> {
-    (any::<bool>(), 0u8..3, any::<bool>(), any::<bool>(), 0u8..3, prop_oneof![Just(None), (5.0f64..80.0).prop_map(Some)], 0u8..3).prop_map(
-        |(ranked, matching, page, own, nearest, reach, row)| Settings {
+    (
+        (any::<bool>(), 0u8..3, any::<bool>(), any::<bool>(), 0u8..3, prop_oneof![Just(None), (5.0f64..80.0).prop_map(Some)], 0u8..3),
+        (any::<bool>(), any::<bool>()),
+    )
+        .prop_map(|((ranked, matching, page, own, nearest, reach, row), (locked, nudged))| Settings {
+            locked_places: if locked { craft_snap::TravelPlaces::OnLine } else { craft_snap::TravelPlaces::Ignore },
+            nudge_places: if nudged { craft_snap::TravelPlaces::OnLine } else { craft_snap::TravelPlaces::Ignore },
             align_reach: reach.map(craft_snap::Reach::Document),
             choose: if ranked { Choose::Ranked } else { Choose::Nearest },
             matching: match matching {
@@ -36,8 +41,7 @@ fn settings() -> impl Strategy<Value = Settings> {
                 _ => craft_snap::SpacingRow::Beyond,
             },
             ..Settings::default()
-        },
-    )
+        })
 }
 
 fn constraint() -> impl Strategy<Value = Constraint> {

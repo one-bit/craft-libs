@@ -327,6 +327,41 @@ struct Line {
     tol: f64,
 }
 
+/// The most strips of one grid a query gathers for a subject that travels along one axis. A box offers up to nine lines of travel (a turned one nine
+/// different ones), and each strip is a gather out of the 16 a query has: lines that lie nearest each other share a strip, so that the places of a turned
+/// box and of what moves with it cost at most this many windows of each grid.
+pub(crate) const MAX_STRIPS: usize = 4;
+
+/// The lines of travel, sorted by where they are across the axis, joined into at most [`MAX_STRIPS`] bands: the lines are cut where the gaps between
+/// neighbours are the widest (the earlier gap on a tie), so a band is lines that lie near each other.
+fn bands(lines: Vec<Line>) -> Vec<Line> {
+    if lines.len() <= MAX_STRIPS {
+        return lines;
+    }
+    // The gap after line `i` is between it and the next.
+    let mut gaps: Vec<(f64, usize)> =
+        lines.windows(2).enumerate().filter_map(|(i, w)| if let [a, b] = w { Some((b.across.0 - a.across.1, i)) } else { None }).collect();
+    gaps.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut cuts: Vec<usize> = gaps.into_iter().take(MAX_STRIPS - 1).map(|g| g.1).collect();
+    cuts.sort_unstable();
+    let mut out: Vec<Line> = Vec::new();
+    let (mut next_cut, mut fresh) = (0, true);
+    for (i, l) in lines.into_iter().enumerate() {
+        match out.last_mut() {
+            Some(band) if !fresh => {
+                band.across = (band.across.0.min(l.across.0), band.across.1.max(l.across.1));
+                band.along = (band.along.0.min(l.along.0), band.along.1.max(l.along.1));
+                band.tol = band.tol.max(l.tol);
+            }
+            _ => out.push(l),
+        }
+        // A cut gap ends the band after this line.
+        fresh = cuts.get(next_cut) == Some(&i);
+        next_cut += usize::from(fresh);
+    }
+    out
+}
+
 /// The windows to gather for a subject that travels along one axis: one thin strip for each line its places travel along (places the same across the
 /// axis, by the same-place rule, share one), in the order of the lines across. A move looks a reach either side of its places along the line; a nudge
 /// looks ahead of them, up to `cap` from the subject (and `cut` says when that was less than it was asked).
@@ -356,9 +391,9 @@ fn travel_strips(cx: &Ctx<'_>, subject: &[Point], tr: Travel, span: f64, cap: f6
         }
     }
     let mut cut = false;
-    let strips = lines
+    let strips = bands(lines.into_iter().map(|(_, l)| l).collect())
         .into_iter()
-        .map(|(_, l)| {
+        .map(|l| {
             let (a0, a1) = (l.across.0 - 2.0 * l.tol, l.across.1 + 2.0 * l.tol);
             let (lo, hi) = l.along;
             let (along, near) = match tr.way {
