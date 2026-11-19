@@ -489,18 +489,29 @@ impl Grid {
     /// The boxes that meet `window`, the nearest to its middle first (then the lower id), at most `limit`, with at most `visits` bucket entries
     /// visited. The buckets are visited in rings round the middle one.
     pub fn gather(&self, window: &Rect, limit: usize, visits: u64) -> Gather<'_> {
+        self.gather_from(window, None, limit, visits)
+    }
+
+    /// The width of one bucket of the finest grid.
+    pub fn cell(&self) -> f64 {
+        self.cell
+    }
+
+    /// As [`Grid::gather`], with the buckets visited in rings round `near` (kept inside the window) and the boxes ranked by their distance to it,
+    /// where `gather` takes the middle of the window. A window that is long and thin, or that looks one way from the subject, is read from its end.
+    pub fn gather_from(&self, window: &Rect, near: Option<Point>, limit: usize, visits: u64) -> Gather<'_> {
         let mut found = Found { visited: 0, examined: 0, cut: false, seen: HashSet::new(), hits: Vec::new(), cap: visits, window: *window };
         // The finest grid first, then each coarser one, then the boxes too wide for any: the small boxes under the pointer are looked at before the wide
         // ones that cover it, and a window meets the few coarse buckets it is over and not every wide box there is.
         let mut more = true;
         if [window.x0, window.y0, window.x1, window.y1].iter().all(|v| v.is_finite()) {
-            more = self.levels.iter().all(|level| self.rings(level, window, &mut found));
+            more = self.levels.iter().all(|level| self.rings(level, window, near, &mut found));
         }
         if more {
             more = self.big.iter().all(|n| self.visit(*n, &mut found));
         }
         let _ = more;
-        let mid = Point::new(0.5 * (window.x0 + window.x1), 0.5 * (window.y0 + window.y1));
+        let mid = near.unwrap_or_else(|| Point::new(0.5 * (window.x0 + window.x1), 0.5 * (window.y0 + window.y1)));
         let mut hits: Vec<(f64, &Cell)> =
             found.hits.iter().map(|n| self.items.get(*n as usize)).filter_map(|c| c.map(|c| (distance_to(&c.bounds, mid), c))).collect();
         hits.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.id.cmp(&b.1.id)).then(a.1.index.cmp(&b.1.index)));
@@ -510,19 +521,24 @@ impl Grid {
     }
 
     /// Visits the buckets of the window in one grid, in rings round its middle. Returns false when the visits ran out.
-    fn rings(&self, level: &Level, window: &Rect, found: &mut Found) -> bool {
+    fn rings(&self, level: &Level, window: &Rect, near: Option<Point>, found: &mut Found) -> bool {
         let (mut x0, mut x1) = (bucket_of(window.x0, level.cell), bucket_of(window.x1, level.cell));
         let (mut y0, mut y1) = (bucket_of(window.y0, level.cell), bucket_of(window.y1, level.cell));
-        for (lo, hi) in [(&mut x0, &mut x1), (&mut y0, &mut y1)] {
+        let at = near.map(|p| (bucket_of(p.x, level.cell), bucket_of(p.y, level.cell)));
+        for (lo, hi, round) in [(&mut x0, &mut x1, at.map(|a| a.0)), (&mut y0, &mut y1, at.map(|a| a.1))] {
             if *hi - *lo + 1 > MAX_WINDOW_BUCKETS {
-                // Some of the window is not looked at: the answer says so.
+                // Some of the window is not looked at: the answer says so. The part kept is round the middle, or round `near` when there is one.
                 found.cut = true;
-                let mid = *lo + (*hi - *lo) / 2;
-                *lo = mid - MAX_WINDOW_BUCKETS / 2;
-                *hi = mid + MAX_WINDOW_BUCKETS / 2 - 1;
+                let mid = round.unwrap_or(*lo + (*hi - *lo) / 2);
+                let start = (mid - MAX_WINDOW_BUCKETS / 2).max(*lo).min(*hi - (MAX_WINDOW_BUCKETS - 1));
+                *lo = start;
+                *hi = start + MAX_WINDOW_BUCKETS - 1;
             }
         }
-        let (cx, cy) = (x0 + (x1 - x0) / 2, y0 + (y1 - y0) / 2);
+        let (cx, cy) = match at {
+            Some((bx, by)) => (bx.max(x0).min(x1), by.max(y0).min(y1)),
+            None => (x0 + (x1 - x0) / 2, y0 + (y1 - y0) / 2),
+        };
         let rings = (cx - x0).max(x1 - cx).max(cy - y0).max(y1 - cy);
         for r in 0..=rings {
             for (bx, by) in ring(cx, cy, r) {
@@ -1069,6 +1085,55 @@ mod tests {
         // The same for a thin column.
         let found = g.gather(&Rect::new(40.0, 0.0, 41.9, 5.9), 1000, 100_000);
         assert_eq!((found.items.len(), found.visited, found.examined), (3, 3, 3));
+    }
+
+    #[test]
+    fn a_window_read_from_one_end_gives_the_boxes_nearest_that_end_and_a_window_read_from_its_middle_is_as_it_was() {
+        // A row of 200 boxes, one to a bucket of 2.
+        let items: Vec<Cell> = (0..200u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
+        let g = Grid::build(items);
+        let ids = |f: &Gather<'_>| f.items.iter().map(|c| c.id.0).collect::<Vec<u64>>();
+        let window = Rect::new(0.0, 0.0, 95.9, 1.0);
+        // From the middle, as before: the five nearest the middle of buckets 0 to 47.
+        let mid = g.gather(&window, 5, 100_000);
+        assert_eq!(ids(&mid), vec![23, 24, 22, 25, 21]);
+        // From the left end: the five nearest it, whatever is at the middle.
+        let left = g.gather_from(&window, Some(Point::new(0.0, 0.5)), 5, 100_000);
+        assert_eq!(ids(&left), vec![0, 1, 2, 3, 4]);
+        assert!(left.cut, "more than the limit met the window");
+        // From the right end.
+        let right = g.gather_from(&window, Some(Point::new(95.9, 0.5)), 5, 100_000);
+        assert_eq!(ids(&right), vec![47, 46, 45, 44, 43]);
+        // With few visits the buckets read are those round `near`, so the box at `near` is not the one left out.
+        let few = g.gather_from(&window, Some(Point::new(0.0, 0.5)), 5, 3);
+        assert_eq!(ids(&few), vec![0, 1, 2]);
+        assert!(few.cut && few.visited == 3);
+        // A `near` outside the window is clamped into it for the buckets, and the boxes are still ranked by their distance to it.
+        let outside = g.gather_from(&window, Some(Point::new(-50.0, 0.5)), 3, 100_000);
+        assert_eq!(ids(&outside), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn a_window_too_wide_is_cut_to_the_buckets_at_its_near_end_and_never_past_its_own_ends() {
+        let items: Vec<Cell> = (0..200u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
+        let g = Grid::build(items);
+        let window = Rect::new(0.0, 0.0, 199.9, 1.0);
+        let ids = |f: &Gather<'_>| {
+            let mut v: Vec<u64> = f.items.iter().map(|c| c.id.0).collect();
+            v.sort_unstable();
+            v
+        };
+        // Near the left end: buckets 0 to 47, not buckets before 0 (there are none) nor a middle part.
+        let left = g.gather_from(&window, Some(Point::new(1.0, 0.5)), 1000, 100_000);
+        assert_eq!(ids(&left), (0..48).collect::<Vec<u64>>());
+        assert!(left.cut);
+        // Near the right end: the last 48 buckets, 52 to 99, and nothing past the window's end.
+        let right = g.gather_from(&window, Some(Point::new(199.0, 0.5)), 1000, 100_000);
+        assert_eq!(ids(&right), (52..100).collect::<Vec<u64>>());
+        // Near the middle: the 48 about it, as `gather` does.
+        let middle = g.gather_from(&window, Some(Point::new(100.0, 0.5)), 1000, 100_000);
+        assert_eq!(ids(&middle).len(), 48);
+        assert_eq!(ids(&g.gather(&window, 1000, 100_000)), (25..=72).collect::<Vec<u64>>());
     }
 
     /// Small boxes in a block about the origin, so that the buckets are 2 wide.

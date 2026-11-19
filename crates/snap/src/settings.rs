@@ -101,6 +101,17 @@ pub enum LineSpan {
     EachSide,
 }
 
+/// Whether a place target pulls a subject that travels along one page axis only: a move held to the axis (`Constraint::Axis`), or a nudge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TravelPlaces {
+    /// No place pulls it: it snaps to lines, lattices and (a nudge) equal gaps only. The default, as before the setting.
+    Ignore,
+    /// A place pulls it where the place lies on the line one of the subject's places travels along (the same line across the axis, within the
+    /// same-place rule), and the subject lands on it. A held move takes a place within its kind's reach along the line, either way; a nudge stops at the
+    /// first place strictly ahead, within the nudge's own reach. The kinds that are on, and their priorities, are those of any other place.
+    OnLine,
+}
+
 /// What marks are derived.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkRule {
@@ -132,6 +143,10 @@ pub struct Settings {
     pub coincide: Coincide,
     /// How far a line mark runs along its line.
     pub line_span: LineSpan,
+    /// Whether places pull a move held to a page axis.
+    pub locked_places: TravelPlaces,
+    /// Whether places stop a nudge.
+    pub nudge_places: TravelPlaces,
 }
 
 impl Default for Settings {
@@ -151,6 +166,8 @@ impl Default for Settings {
             marks: MarkRule::Coincident,
             coincide: Coincide::default(),
             line_span: LineSpan::Every,
+            locked_places: TravelPlaces::Ignore,
+            nudge_places: TravelPlaces::Ignore,
         }
     }
 }
@@ -185,6 +202,8 @@ mod tests {
             (Choose::Nearest, Matching::AnyToAny, MarkRule::Coincident, SpacingRow::Band, SpacingGaps::Row, SizeAxes::SameAxis)
         );
         assert_eq!((s.frames, s.align_reach, s.angle_period), (Frames { page: true, own: true }, None, TAU));
+        assert_eq!((s.locked_places, s.nudge_places), (TravelPlaces::Ignore, TravelPlaces::Ignore));
+        assert_eq!(s.line_span, LineSpan::Every);
         assert_eq!(s.places, Places::Compete { bias: 0.25 });
         assert_eq!(s.coincide, Coincide { abs: 1e-9, rel: 8.0 * f64::EPSILON, angle: 1e-9 });
         assert!(s.is_usable());
