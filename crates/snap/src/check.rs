@@ -155,6 +155,24 @@ fn may_meet(matching: crate::settings::Matching, kind: Kind, side: crate::frame:
     }
 }
 
+/// The spans of the targets that a mark from the nearest target on one side of `ext` to the nearest on the other reaches, by brute force: of the spans
+/// that start before `ext`, those with the least gap to it; of those that end past it, the same (a span that touches or overlaps has no gap, and every
+/// one of them is the nearest). With `slack`, a gap within the same-place rule is none, and gaps within it of the least are ties.
+fn each_side_spans(spans: &[(f64, f64)], ext: (f64, f64), co: &Coincide, slack: bool) -> Vec<(f64, f64)> {
+    let (a, b) = ext;
+    let eps = |x: f64, y: f64| if slack { co.tol(x, y) } else { 0.0 };
+    let mut chosen = Vec::new();
+    let left: Vec<&(f64, f64)> = spans.iter().filter(|s| s.0 < a - eps(s.0, a)).collect();
+    let left_gap = |s: &(f64, f64)| if a - s.1 <= eps(a, s.1) { 0.0 } else { a - s.1 };
+    let least = left.iter().map(|s| left_gap(s)).fold(f64::INFINITY, f64::min);
+    chosen.extend(left.into_iter().filter(|s| left_gap(s) <= least + eps(least, a)));
+    let right: Vec<&(f64, f64)> = spans.iter().filter(|s| s.1 > b + eps(s.1, b)).collect();
+    let right_gap = |s: &(f64, f64)| if s.0 - b <= eps(s.0, b) { 0.0 } else { s.0 - b };
+    let least = right.iter().map(|s| right_gap(s)).fold(f64::INFINITY, f64::min);
+    chosen.extend(right.into_iter().filter(|s| right_gap(s) <= least + eps(least, b)));
+    chosen
+}
+
 /// The rules a line mark keeps about which targets it stands for and how far it reaches along its line: every kind it names is a line a side of
 /// the subject may meet under the matching rule, and the segment is the subject's extent on the line joined with every target's extent (under
 /// `Every`) or with the extent of the one target nearest the subject and no other (under `Nearest`).
@@ -206,6 +224,17 @@ fn line_targets(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark, ac: f64
             // The segment covers every target's extent (and, when the subject's sides are all known, is exactly their join).
             if !spans.iter().all(|sp| covers(*sp)) || (exact && !same_seg(joined(&spans))) {
                 return broken("a line mark does not reach every target on its line", m);
+            }
+        }
+        crate::settings::LineSpan::EachSide => {
+            // The nearest target on each side, and the subject's extent between them. Spans that touch within the same-place rule may be told as touching
+            // or as not by the query and by this check, so a segment is true if either way of telling gives it.
+            let held = [false, true].into_iter().any(|slack| {
+                let chosen = each_side_spans(&spans, ext, co, slack);
+                if exact { same_seg(joined(&chosen)) } else { chosen.iter().all(|sp| covers(*sp)) }
+            });
+            if !held {
+                return broken("a line mark does not run from the nearest target on one side to the nearest on the other", m);
             }
         }
         crate::settings::LineSpan::Nearest => {

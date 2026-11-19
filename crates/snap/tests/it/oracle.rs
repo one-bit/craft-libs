@@ -962,6 +962,36 @@ mod line_reach_matching_and_nudge {
     }
 
     #[test]
+    fn a_segment_under_each_side_runs_from_the_nearest_target_on_one_side_to_the_nearest_on_the_other() {
+        // Objects with their left sides on x = -5 at y -40 and 40 (the nearest on each side of the subject's row) and farther out at -120 and 120.
+        let t = scene(
+            &[
+                (1, frame(0.0, -40.0, 10.0, 10.0, 0.0)),
+                (2, frame(0.0, 40.0, 10.0, 10.0, 0.0)),
+                (3, frame(0.0, -120.0, 10.0, 10.0, 0.0)),
+                (4, frame(0.0, 120.0, 10.0, 10.0, 0.0)),
+            ],
+            &[],
+            &[],
+        );
+        let each = Settings { line_span: LineSpan::EachSide, ..lines_only() };
+        let q = query(box_subject(frame(0.0, 1.0, 10.0, 10.0, 0.0)), &each);
+        let r = run(&t, &q);
+        assert!(
+            matches!(r.marks.iter().find(|m| matches!(m, Mark::Line { offset, .. } if (offset + 5.0).abs() < 1e-9)), Some(Mark::Line { segment, .. }) if segment.p0.y.min(segment.p1.y) == -45.0 && segment.p0.y.max(segment.p1.y) == 45.0),
+            "{r:?}"
+        );
+        let want = "a line mark does not run from the nearest target on one side to the nearest on the other";
+        assert_eq!(fires(&t, &q, reach(-4.0, 6.0)), want, "the subject's own extent only");
+        assert_eq!(fires(&t, &q, reach(-45.0, 6.0)), want, "one side only");
+        assert_eq!(fires(&t, &q, reach(-4.0, 45.0)), want, "the other side only");
+        assert_eq!(fires(&t, &q, reach(-125.0, 45.0)), want, "the farther one below");
+        assert_eq!(fires(&t, &q, reach(-45.0, 125.0)), want, "the farther one above");
+        assert_eq!(fires(&t, &q, reach(-125.0, 125.0)), want, "every target");
+        assert_eq!(fires(&t, &q, reach(-46.0, 45.0)), want, "a little past the nearest");
+    }
+
+    #[test]
     fn a_mark_names_only_targets_a_side_of_the_subject_may_meet_under_the_matching_rule() {
         // The subject's right side is on x = 5, the left side of the object beside it.
         let t = scene(&[(1, frame(10.0, 40.0, 10.0, 10.0, 0.0))], &[], &[]);

@@ -94,6 +94,11 @@ pub enum LineSpan {
     /// From the subject's side to the nearest target on the line, and no farther. The members of a group of coincident lines are kept sorted
     /// along the line, so the nearest is found by bisection.
     Nearest,
+    /// From the nearest target on one side of the subject to the nearest on the other, through the subject: the subject's own extent joined with
+    /// the whole span of the nearest target on each side. A target that overlaps or touches the subject's extent on a side is the nearest on that
+    /// side (all of them are, joined); one that lies wholly inside the subject's extent is on neither side. With targets on one side only, the
+    /// mark runs to the nearest of those and no farther.
+    EachSide,
 }
 
 /// What marks are derived.

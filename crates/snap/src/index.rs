@@ -72,6 +72,9 @@ pub(crate) struct Member {
     pub id: Option<Id>,
 }
 
+/// An extent along a line: where it starts and where it ends.
+pub(crate) type Span = (f64, f64);
+
 /// The lines of one kind in one direction, sorted by offset.
 #[derive(Clone, Debug)]
 pub(crate) struct Set {
@@ -103,6 +106,48 @@ impl Set {
             .flatten()
             .min_by(|p, q| p.0.total_cmp(&q.0).then(p.1.id.cmp(&q.1.id)).then(p.1.lo.total_cmp(&q.1.lo)))
             .map_or(union, |(_, x)| (x.lo, x.hi))
+    }
+
+    /// What a mark that runs from the nearest target on each side of `ext` (the extent of the subject's side) reaches among the members of an
+    /// entry: the span to the left of `ext` and the span to the right, each found by bisection in `log2(m)`.
+    ///
+    /// A member is on the left when it starts before `ext` and on the right when it ends past it; one inside `ext` is on neither. On a side, the
+    /// members that overlap or touch `ext` are the nearest (all of them: their join is the span), else the member that comes nearest without
+    /// reaching it (the ties joined). The members are sorted by where they start, with the farthest reach so far kept, so the first member of the
+    /// left whose reach touches `ext`, the farthest reach of the left and the first member past `ext` are each one bisection.
+    ///
+    /// An entry of one (or none) is its own span on the left, to be told by where it lies; `ext` that is not a range gives the union.
+    pub fn each_side_spans(&self, e: &Entry, ext: Span) -> (Option<Span>, Option<Span>) {
+        let union = (e.lo <= e.hi).then_some((e.lo, e.hi));
+        let (a, b) = ext;
+        if e.mn == 0 || a.partial_cmp(&b).is_none_or(|o| o.is_gt()) {
+            return (union, None);
+        }
+        let range = e.m0 as usize..(e.m0 + e.mn) as usize;
+        let (Some(m), Some(am)) = (self.members.get(range.clone()), self.argmax.get(range)) else { return (union, None) };
+        let reach = |i: usize| am.get(i).and_then(|k| m.get(*k as usize));
+        // The members that start before `ext`: the one that reaches farthest decides whether any of them touches `ext`.
+        let p = m.partition_point(|x| x.lo < a);
+        let left = p.checked_sub(1).and_then(reach).and_then(|far| {
+            if far.hi >= a {
+                let j = am.get(..p)?.partition_point(|k| m.get(*k as usize).is_some_and(|x| x.hi < a));
+                Some((m.get(j)?.lo, far.hi))
+            } else {
+                Some((far.lo, far.hi))
+            }
+        });
+        // The members that start no later than `ext` ends: one that reaches past it is on the right, else the first that starts after it.
+        let r = m.partition_point(|x| x.lo <= b);
+        let right = r.checked_sub(1).and_then(reach).filter(|far| far.hi > b).and_then(|far| {
+            let j = am.get(..r)?.partition_point(|k| m.get(*k as usize).is_some_and(|x| x.hi <= b));
+            Some((m.get(j)?.lo, far.hi))
+        });
+        let right = right.or_else(|| {
+            let first = m.get(r)?;
+            let end = m.partition_point(|x| x.lo <= first.lo);
+            Some((first.lo, m.get(end.checked_sub(1)?)?.hi))
+        });
+        (left, right)
     }
 
     /// The index of the first entry whose offset is not below `at`.
@@ -848,6 +893,55 @@ mod tests {
         let t = DirTable::build(vec![member(1, 0.0, 10.0), member(2, 5.0, 10.0)], &co);
         let set = t.dirs[0].sets[0].clone();
         assert_eq!(set.nearest_span(&set.entries[0], (12.0, 13.0)), (0.0, 10.0));
+    }
+
+    #[test]
+    fn the_members_nearest_on_each_side_are_found_by_bisection_as_a_scan_finds_them() {
+        let co = Coincide::default();
+        // A small lattice so that members touch the extent, end together and start together; every case is checked against a scan.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for _ in 0..400 {
+            let count = 2 + next(12);
+            let lines: Vec<RawLine> = (0..count)
+                .map(|i| {
+                    let lo = next(24) as f64;
+                    RawLine { angle: 0.0, offset: 2.0, lo, hi: lo + next(7) as f64, kind: Kind::Edge, id: Some(Id(i)), side: None }
+                })
+                .collect();
+            let t = DirTable::build(lines.clone(), &co);
+            let set = t.dirs.first().and_then(|d| d.sets.first()).unwrap();
+            let e = set.entries[0];
+            let a = next(30) as f64 - 3.0;
+            let ext = (a, a + next(8) as f64);
+            let (left, right) = set.each_side_spans(&e, ext);
+            let side = |on: Vec<&RawLine>, gap: &dyn Fn(&RawLine) -> f64| {
+                let least = on.iter().map(|l| gap(l)).fold(f64::INFINITY, f64::min);
+                let tied: Vec<&&RawLine> = on.iter().filter(|l| gap(l) == least).collect();
+                (!tied.is_empty())
+                    .then(|| (tied.iter().map(|l| l.lo).fold(f64::INFINITY, f64::min), tied.iter().map(|l| l.hi).fold(f64::NEG_INFINITY, f64::max)))
+            };
+            let want_left = side(lines.iter().filter(|l| l.lo < ext.0).collect(), &|l| (ext.0 - l.hi).max(0.0));
+            let want_right = side(lines.iter().filter(|l| l.hi > ext.1).collect(), &|l| (l.lo - ext.1).max(0.0));
+            assert_eq!((left, right), (want_left, want_right), "{ext:?} {lines:?}");
+        }
+        // An entry of one is its own span, to be told by where it lies, and an extent that is not a range gives the union.
+        let one = DirTable::build(vec![raw(0.0, 2.0, Kind::Edge, 1)], &co);
+        let s1 = one.dirs.first().and_then(|d| d.sets.first()).unwrap();
+        assert_eq!(s1.each_side_spans(&s1.entries[0], (5.0, 6.0)), (Some((-1.0, 1.0)), None));
+        let two = DirTable::build(
+            vec![RawLine { lo: 0.0, hi: 1.0, ..raw(0.0, 2.0, Kind::Edge, 1) }, RawLine { lo: 5.0, hi: 6.0, ..raw(0.0, 2.0, Kind::Edge, 2) }],
+            &co,
+        );
+        let s2 = two.dirs.first().and_then(|d| d.sets.first()).unwrap();
+        let e = s2.entries[0];
+        assert_eq!(s2.each_side_spans(&e, (3.0, 2.0)), (Some((0.0, 6.0)), None));
+        assert_eq!(s2.each_side_spans(&e, (f64::NAN, 2.0)), (Some((0.0, 6.0)), None));
     }
 
     #[test]

@@ -46,6 +46,28 @@ fn is_hit(sol: &Solution, probe: &Probe, c: f64, cx: &Ctx<'_>) -> bool {
     })
 }
 
+/// The spans a mark reaches under `LineSpan::EachSide`, of those on one line, for a subject whose side spans `ext`: on the left (those that start
+/// before `ext`) the ones that touch `ext`, else the ones that end last; on the right (those that end past `ext`) the ones that touch `ext`, else the
+/// ones that start first. A span inside `ext` is on neither side. (The index finds the same spans of the members of one place by bisection.)
+pub(crate) fn each_side(spans: &[(f64, f64)], ext: (f64, f64)) -> Vec<(f64, f64)> {
+    let (a, b) = ext;
+    let left: Vec<(f64, f64)> = spans.iter().copied().filter(|s| s.0 < a).collect();
+    let mut out: Vec<(f64, f64)> = left.iter().copied().filter(|s| s.1 >= a).collect();
+    if out.is_empty() {
+        let last = left.iter().map(|s| s.1).fold(f64::NEG_INFINITY, f64::max);
+        out = left.into_iter().filter(|s| s.1 == last).collect();
+    }
+    let right: Vec<(f64, f64)> = spans.iter().copied().filter(|s| s.1 > b).collect();
+    let touching: Vec<(f64, f64)> = right.iter().copied().filter(|s| s.0 <= b).collect();
+    if touching.is_empty() {
+        let first = right.iter().map(|s| s.0).fold(f64::INFINITY, f64::min);
+        out.extend(right.into_iter().filter(|s| s.0 == first));
+    } else {
+        out.extend(touching);
+    }
+    out
+}
+
 /// The groups of lines one probe's sides lie on.
 fn groups_of(cx: &mut Ctx<'_>, sol: &Solution, probe: &Probe) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
@@ -82,10 +104,11 @@ fn groups_of(cx: &mut Ctx<'_>, sol: &Solution, probe: &Probe) -> Vec<Group> {
             if f.lo <= f.hi {
                 g.spans.push((f.lo, f.hi));
             }
+            g.spans.extend(f.also);
         }
     }
     groups.sort_by(|a, b| a.c.total_cmp(&b.c));
-    let nearest = cx.s.line_span == LineSpan::Nearest;
+    let span = cx.s.line_span;
     for g in &mut groups {
         g.kinds.sort();
         // Every target on the line, or the one nearest the subject and no other.
@@ -98,10 +121,10 @@ fn groups_of(cx: &mut Ctx<'_>, sol: &Solution, probe: &Probe) -> Vec<Group> {
                 0.0
             }
         };
-        let chosen: Vec<(f64, f64)> = if nearest {
-            g.spans.iter().copied().min_by(|a, b| gap(a).total_cmp(&gap(b)).then(a.0.total_cmp(&b.0))).into_iter().collect()
-        } else {
-            g.spans.clone()
+        let chosen: Vec<(f64, f64)> = match span {
+            LineSpan::Nearest => g.spans.iter().copied().min_by(|a, b| gap(a).total_cmp(&gap(b)).then(a.0.total_cmp(&b.0))).into_iter().collect(),
+            LineSpan::EachSide => each_side(&g.spans, g.ext),
+            LineSpan::Every => g.spans.clone(),
         };
         (g.lo, g.hi) = chosen.iter().fold(g.ext, |e, s| (e.0.min(s.0), e.1.max(s.1)));
     }

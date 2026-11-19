@@ -26,6 +26,8 @@ pub(crate) struct Found {
     /// The extent along the line (empty, `lo > hi`, for a line that runs on for ever).
     pub lo: f64,
     pub hi: f64,
+    /// Under `LineSpan::EachSide`, the span of the nearest target on the other side of the subject, when the entry has one apart from `lo` to `hi`.
+    pub also: Option<(f64, f64)>,
 }
 
 /// How the subject travels for a line: along the line's normal (its two degrees free), or along a direction (a constraint left one).
@@ -68,16 +70,31 @@ fn from_table(cx: &mut Ctx<'_>, table: &DirTable, angle: f64, s: f64, side: Side
             continue;
         }
         cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(set.entries.len()));
-        let nearest = cx.s.line_span == LineSpan::Nearest;
+        let span = cx.s.line_span;
         let found = |e: &Entry, ext: Option<(f64, f64)>| {
-            let (lo, hi) = match ext {
-                Some(x) if nearest => set.nearest_span(e, x),
-                _ => (e.lo, e.hi),
+            let (lo, hi, also) = match ext {
+                Some(x) if span == LineSpan::Nearest => {
+                    let (lo, hi) = set.nearest_span(e, x);
+                    (lo, hi, None)
+                }
+                Some(x) if span == LineSpan::EachSide => match set.each_side_spans(e, x) {
+                    (Some((lo, hi)), also) => (lo, hi, also),
+                    (None, Some((lo, hi))) => (lo, hi, None),
+                    (None, None) => (e.lo, e.hi, None),
+                },
+                _ => (e.lo, e.hi, None),
             };
-            Found { kind: set.kind, id: e.id, c: e.offset, count: e.count, lo, hi }
+            Found { kind: set.kind, id: e.id, c: e.offset, count: e.count, lo, hi, also }
         };
         if let Some(ext) = on {
             let list = entries_on(cx, &set.entries, s);
+            if span == LineSpan::EachSide {
+                // Each entry of members costs five bisections: where the members that start before the subject end, the first of them that
+                // touches it, where those that start no later than it ends, the first of them that reaches past it, and the end of the first
+                // group that starts after it.
+                let steps = list.iter().map(|e| 5 * log_steps(e.mn as usize)).fold(0u64, u64::saturating_add);
+                cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(steps);
+            }
             out.extend(list.into_iter().map(|e| found(e, Some(ext))));
         } else {
             out.extend(set.nearest(s).and_then(|i| set.entries.get(i)).map(|e| found(e, None)));
@@ -103,7 +120,7 @@ fn from_lattices(cx: &Ctx<'_>, angle: f64, s: f64, side: Side, on: bool, out: &m
         }
         let c = origin + n * pitch - o;
         if !on || cx.co.same(c, s) {
-            out.push(Found { kind: lat.kind, id: None, c, count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
+            out.push(Found { kind: lat.kind, id: None, c, count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY, also: None });
         }
     }
 }
@@ -150,7 +167,7 @@ fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Sid
                 continue;
             }
             let (c, lo, hi) = if flipped { (-l.offset, -l.hi, -l.lo) } else { (l.offset, l.lo, l.hi) };
-            let found = Found { kind, id: Some(obj.id), c, count: 1, lo, hi };
+            let found = Found { kind, id: Some(obj.id), c, count: 1, lo, hi, also: None };
             if on {
                 if co.same(c, s) {
                     best.push(found);
@@ -216,7 +233,7 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
         let first = if up { n.floor() + 1.0 } else { n.ceil() - 1.0 };
         let k = if cx.co.same(line(first), s) { if up { first + 1.0 } else { first - 1.0 } } else { first };
         if k.is_finite() && k.abs() <= 4_503_599_627_370_496.0 {
-            out.push(Found { kind: lat.kind, id: None, c: line(k), count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY });
+            out.push(Found { kind: lat.kind, id: None, c: line(k), count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY, also: None });
         }
     }
     let t = cx.t;
@@ -237,6 +254,7 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
                 count: e.count,
                 lo: e.lo,
                 hi: e.hi,
+                also: None,
             }));
         }
     }
