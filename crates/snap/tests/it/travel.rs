@@ -238,6 +238,34 @@ mod held_move {
     }
 
     #[test]
+    fn a_vertex_wins_a_near_tie_by_fifteen_percent_of_its_reach_in_a_held_move_and_in_a_free_one() {
+        // A place of the app 4 from the box's right middle, and the end of an outline `x - 2` from it, on the same line: the end wins by 15% of the reach of
+        // 6 (0.9), so at 4.5 it does and at 5 it does not. The same for a move that is not held.
+        let at = |x: f64| {
+            let mut b = TargetsBuilder::new(Limits::default());
+            b.point(Some(Id(9)), Point::new(6.0, 5.0), Kind::Point(0), 9).unwrap();
+            let parts = Parts { detail: true, ..Parts::NONE };
+            b.object(Id(1), Object { frame: frame(x + 0.75, 7.0, 1.5, 4.0, 0.0), bounds: None, angle: None, parts }).unwrap();
+            let mut p = BezPath::new();
+            p.move_to((x, 5.0));
+            p.line_to((x + 1.5, 9.0));
+            b.path(Id(1), p).unwrap();
+            b.build()
+        };
+        let s = on_line();
+        for (x, vertex_wins) in [(6.5, true), (7.0, false)] {
+            let t = at(x);
+            let r = held(&t, &s, subject(), Axis::X);
+            let (want, kind) = if vertex_wins { (x - 2.0, Kind::Vertex) } else { (4.0, Kind::Point(0)) };
+            assert_eq!((r.delta.x, r.hits[0].kind), (want, kind), "held, the end at {x}: {r:?}");
+            let q = query(box_subject(subject()), &s);
+            let free = run(&t, &q);
+            free.check(&t, &q).unwrap();
+            assert_eq!((free.delta, free.hits[0].kind), (vec2(want, 0.0), kind), "free, the end at {x}: {free:?}");
+        }
+    }
+
+    #[test]
     fn the_crossings_and_vertices_of_outlines_are_places_on_the_line() {
         let s = on_line();
         // An outline of two lines crossing at (6, 5) and a vertex at (6, 3) off the line: the subject's right middle meets the crossing.
@@ -955,6 +983,27 @@ mod windows {
         assert_eq!(gathers(&on_s, f) - gathers(&off_s, f), 8);
         let flat = frame(0.0, 5.0, 4.0, 2.0, 0.0);
         assert_eq!(gathers(&on_s, flat) - gathers(&off_s, flat), 6);
+    }
+
+    #[test]
+    fn lines_that_lie_near_each_other_share_a_strip_and_the_strips_leave_the_gaps_between_them_unread() {
+        // The box's three lines (y 4, 5 and 6) and the lines of six places that move with it (20 and 21, 40 and 41, 80 and 81): nine lines, four strips, cut
+        // at the widest gaps. A place between the lines of a strip is weighed (and is not on a line); one in a gap between strips is not even looked at.
+        let places: Vec<(u64, f64, f64)> =
+            [(1, 10.0), (2, 30.0), (3, 60.0), (4, 5.5), (5, 20.5), (6, 70.0)].iter().map(|(i, y)| (*i, 3.0, *y)).collect();
+        let t = targets(&places, &[]);
+        let own: Vec<Point> = [20.0, 21.0, 40.0, 41.0, 80.0, 81.0].iter().map(|y| Point::new(0.0, *y)).collect();
+        let with = |s: &Settings| {
+            let q = Query {
+                constraint: Constraint::Axis(Axis::X),
+                ..query(Subject::Box { frame: frame(0.0, 5.0, 4.0, 2.0, 0.0), bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &own }, s)
+            };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            r.work
+        };
+        let (on, off) = (with(&on_line()), with(&Settings::default()));
+        assert_eq!((on.gathers - off.gathers, on.points - off.points), (4, 2), "{on:?} {off:?}");
     }
 
     #[test]
