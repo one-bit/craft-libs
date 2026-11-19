@@ -66,6 +66,36 @@ fn reach(r: &craft_snap::Snapped, mirror: bool) -> Option<(f64, f64)> {
     })
 }
 
+/// The same scene turned a quarter (x and y swapped): the line is y = 50, the spans run along x, and the subject's top side is the one that snaps.
+fn turned_a_quarter(spans: &[(f64, f64)], guides: &[(f64, f64)], ext: (f64, f64), s: &Settings) -> Option<(f64, f64)> {
+    let mut b = TargetsBuilder::new(Limits::default());
+    for (i, (lo, hi)) in spans.iter().enumerate() {
+        b.object(Id(i as u64 + 1), object(frame(0.5 * (lo + hi), 45.0, hi - lo, 10.0, 0.0))).unwrap();
+    }
+    for (i, (lo, hi)) in guides.iter().enumerate() {
+        b.line(Some(Id(1000 + i as u64)), Axis::Y, 50.0, Some((*lo, *hi)), Kind::Guide).unwrap();
+    }
+    let t = b.build();
+    let q = query(
+        Subject::Box {
+            frame: frame(0.5 * (ext.0 + ext.1), 45.0, ext.1 - ext.0, 10.0, 0.0),
+            bounds: None,
+            u: Anchors::NONE,
+            v: Anchors { min: false, mid: false, max: true },
+            own: &[],
+        },
+        s,
+    );
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+    r.marks.iter().find_map(|m| match m {
+        Mark::Line { segment, kinds, .. } if kinds.iter().any(|k| matches!(k, Kind::Edge | Kind::Guide)) => {
+            Some((segment.p0.x.min(segment.p1.x), segment.p0.x.max(segment.p1.x)))
+        }
+        _ => None,
+    })
+}
+
 /// What a mark from the nearest target on each side reaches, from the definition and a scan of every span: of those that start before the subject, the
 /// one or ones with the least gap to it; of those that end past it, the same; and the subject's own extent.
 fn expected(spans: &[(f64, f64)], ext: (f64, f64)) -> (f64, f64) {
@@ -215,6 +245,8 @@ proptest! {
         // Mirrored: the same scene, y negated.
         let mirrored = drag(&column_with(&spans, &guides, 0.0, true), &s, ext, 0.0, true);
         prop_assert_eq!(reach(&mirrored, true), got);
+        // Turned a quarter, the line runs along x and the mark is the same.
+        prop_assert_eq!(turned_a_quarter(&spans, &guides, ext, &s), got);
         // The same scene far from the origin (along x, so that the extents stay exact): the same mark.
         if far > 0.0 {
             let moved = settings(LineSpan::EachSide);
