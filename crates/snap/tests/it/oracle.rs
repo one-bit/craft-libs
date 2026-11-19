@@ -802,6 +802,10 @@ mod finer_rules {
     fn a_place_mark_of_an_app_place_names_its_object_and_its_number() {
         let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
         b.point(Some(Id(9)), Point::new(50.0, 50.0), Kind::Point(0), 3).unwrap();
+        // Two objects far away: one that can give places through a detail source, and one that cannot.
+        b.object(Id(7), object(frame(300.0, 300.0, 10.0, 10.0, 0.0))).unwrap();
+        let plain = craft_snap::Parts { detail: false, ..craft_snap::Parts::ALL };
+        b.object(Id(6), craft_snap::Object { parts: plain, ..object(frame(400.0, 300.0, 10.0, 10.0, 0.0)) }).unwrap();
         let t = b.build();
         let s = Settings::default();
         let q = query(Subject::Point { at: Point::new(50.5, 50.5), base: None }, &s);
@@ -851,6 +855,20 @@ mod finer_rules {
             ),
             want
         );
+        // A place of an app's kind that names an object is the place of one the builder holds, or one a detail source gives for an object that can: the
+        // check cannot read the source, and takes the object that can for what it says. An object that cannot give places is not what it says.
+        let set_id = |id: u64| {
+            move |r: &mut craft_snap::Snapped| {
+                for m in &mut r.marks {
+                    if let Mark::Place { id: at, .. } = m {
+                        *at = Some(Id(id));
+                    }
+                }
+            }
+        };
+        assert_eq!(fires(&t, &q, set_id(7)), "", "an object that can give places through a detail source may have given this one");
+        assert_eq!(fires(&t, &q, set_id(6)), want, "an object that offers no detail gives no place");
+        assert_eq!(fires(&t, &q, set_id(8)), want, "no such object");
     }
 
     #[test]
@@ -989,6 +1007,51 @@ mod line_reach_matching_and_nudge {
         assert_eq!(fires(&t, &q, reach(-45.0, 125.0)), want, "the farther one above");
         assert_eq!(fires(&t, &q, reach(-125.0, 125.0)), want, "every target");
         assert_eq!(fires(&t, &q, reach(-46.0, 45.0)), want, "a little past the nearest");
+    }
+
+    /// Objects 10 wide with their left sides on x = -5, one for each span along y (lowest first).
+    fn column(spans: &[(f64, f64)]) -> Targets {
+        let objs: Vec<(u64, TurnedBox)> =
+            spans.iter().enumerate().map(|(i, (lo, hi))| (i as u64 + 1, frame(0.0, 0.5 * (lo + hi), 10.0, hi - lo, 0.0))).collect();
+        scene(&objs, &[], &[])
+    }
+
+    #[test]
+    fn a_segment_under_each_side_is_asked_for_exactly_at_the_ends_of_the_subjects_extent_and_within_the_same_place_rule_of_them() {
+        // The subject is at y -4 to 6, and only its left side snaps (so that the lines of the targets across do not move it). A target that starts where its
+        // extent starts, or within the rule of it, is inside the extent and not on its low side; one that ends where it ends, or within the rule of it, is not
+        // on its high side. Each result below is made false by taking such a target for the nearest.
+        let each = Settings { line_span: LineSpan::EachSide, ..lines_only() };
+        let want = "a line mark does not run from the nearest target on one side to the nearest on the other";
+        let left_side = Subject::Box {
+            frame: frame(0.0, 1.0, 10.0, 10.0, 0.0),
+            bounds: None,
+            u: craft_snap::Anchors { min: true, mid: false, max: false },
+            v: craft_snap::Anchors::NONE,
+            own: &[],
+        };
+        let q = query(left_side, &each);
+        let low = [(-60.0, -4.0 - 1.0e-3), (35.0, 45.0)];
+        // Starting exactly at the extent's start.
+        let t = column(&[low[0], (-4.0, -3.0), low[1]]);
+        assert_eq!(fires(&t, &q, reach(-4.0, 45.0)), want, "the target inside the extent is not the nearest below");
+        assert_eq!(fires(&t, &q, reach(-60.0, 45.0)), "");
+        // Starting within the rule of it (5e-10 past it).
+        let t = column(&[low[0], (-4.0 + 5.0e-10, -3.0), low[1]]);
+        assert_eq!(fires(&t, &q, reach(-4.0, 45.0)), want);
+        // Ending exactly at the extent's end, and within the rule of it (5e-10 short of it).
+        let high = [(-45.0, -35.0), (6.0 + 1.0e-3, 45.0)];
+        let t = column(&[high[0], (-3.0, 6.0), high[1]]);
+        assert_eq!(fires(&t, &q, reach(-45.0, 6.0)), want, "the target inside the extent is not the nearest above");
+        assert_eq!(fires(&t, &q, reach(-45.0, 45.0)), "");
+        let t = column(&[high[0], (-3.0, 6.0 - 5.0e-10), high[1]]);
+        assert_eq!(fires(&t, &q, reach(-45.0, 6.0)), want);
+        // A target that ends 5e-10 short of the extent's start touches it within the rule, and is the nearest below with those that touch it: the result of
+        // the engine (which tells it by the exact numbers) and the one that takes it for touching are both true.
+        let t = column(&[(-60.0, -4.0 - 5.0e-10), (-10.0, 0.0), high[1]]);
+        assert_eq!(fires(&t, &q, reach(-10.0, 45.0)), "");
+        assert_eq!(fires(&t, &q, reach(-60.0, 45.0)), "");
+        assert_eq!(fires(&t, &q, reach(-9.0, 45.0)), want, "short of the target that touches it");
     }
 
     #[test]

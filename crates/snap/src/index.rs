@@ -1088,6 +1088,14 @@ mod tests {
     }
 
     #[test]
+    fn the_cell_of_a_grid_is_twice_the_median_of_the_longer_sides_and_one_for_places_with_no_size() {
+        // Boxes 1 wide: buckets of 2. Boxes 3 high and 1 wide: of 6. Places that are points: of 1.
+        assert_eq!(Grid::build(vec![cell(1, 0.0, 0.0, 1.0, 1.0), cell(2, 5.0, 5.0, 1.0, 1.0)]).cell(), 2.0);
+        assert_eq!(Grid::build(vec![cell(1, 0.0, 0.0, 1.0, 3.0), cell(2, 5.0, 5.0, 1.0, 3.0)]).cell(), 6.0);
+        assert_eq!(Grid::build(vec![cell(1, 0.0, 0.0, 0.0, 0.0), cell(2, 5.0, 5.0, 0.0, 0.0)]).cell(), 1.0);
+    }
+
+    #[test]
     fn a_window_read_from_one_end_gives_the_boxes_nearest_that_end_and_a_window_read_from_its_middle_is_as_it_was() {
         // A row of 200 boxes, one to a bucket of 2.
         let items: Vec<Cell> = (0..200u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
