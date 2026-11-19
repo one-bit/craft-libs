@@ -698,8 +698,19 @@ mod against_a_scan {
         sign * if ahead.is_finite() { ahead } else { fallback }
     }
 
+    /// A fixed seed, so that a run is the same run each time; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and each find is a case to read.
+    fn config() -> ProptestConfig {
+        let number = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(default);
+        ProptestConfig {
+            cases: u32::try_from(number("CRAFT_SNAP_CASES", 1500)).unwrap_or(1500),
+            rng_seed: proptest::test_runner::RngSeed::Fixed(number("CRAFT_SNAP_SEED", 0x7a5e)),
+            max_global_rejects: 1_000_000,
+            ..ProptestConfig::default()
+        }
+    }
+
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(1500))]
+        #![proptest_config(config())]
 
         #[test]
         fn a_held_move_goes_to_the_nearest_place_on_a_line_its_places_travel_along(s in scene(), x_axis in any::<bool>()) {

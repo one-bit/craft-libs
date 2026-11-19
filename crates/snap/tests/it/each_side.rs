@@ -6,12 +6,24 @@ use proptest::prelude::*;
 
 use crate::common::*;
 
-/// Objects 10 wide whose right sides are on x = 50, one for each span along y.
-fn column(spans: &[(f64, f64)], dx: f64, mirror: bool) -> Targets {
+/// Objects 10 wide whose right sides are on x = 50, one for each span along y, and guides on the same line with a span each: two kinds at one place.
+fn column_with(spans: &[(f64, f64)], guides: &[(f64, f64)], dx: f64, mirror: bool) -> Targets {
     let sign = if mirror { -1.0 } else { 1.0 };
     let objs: Vec<(u64, craft_snap::TurnedBox)> =
         spans.iter().enumerate().map(|(i, (lo, hi))| (i as u64 + 1, frame(45.0 + dx, sign * 0.5 * (lo + hi), 10.0, hi - lo, 0.0))).collect();
-    scene(&objs, &[], &[])
+    let mut b = TargetsBuilder::new(Limits::default());
+    for (id, f) in &objs {
+        b.object(Id(*id), object(*f)).unwrap();
+    }
+    for (i, (lo, hi)) in guides.iter().enumerate() {
+        let (a, z) = if mirror { (-hi, -lo) } else { (*lo, *hi) };
+        b.line(Some(Id(1000 + i as u64)), Axis::X, 50.0 + dx, Some((a, z)), Kind::Guide).unwrap();
+    }
+    b.build()
+}
+
+fn column(spans: &[(f64, f64)], dx: f64, mirror: bool) -> Targets {
+    column_with(spans, &[], dx, mirror)
 }
 
 /// Only lines pull: a corner of the subject near a corner of a target would take both its degrees, and the subject would not be where it was put.
@@ -124,6 +136,23 @@ fn targets_the_same_distance_away_are_all_reached_and_the_others_are_not() {
 }
 
 #[test]
+fn targets_of_different_kinds_at_one_place_are_chosen_between_together() {
+    // A box's span and a guide's, on one line: the guide touches the subject from below (110 to 130) and the box overlaps it (125 to 135), so both are the
+    // nearest below and the mark runs to the lower of their starts; a guide far above and a box nearer above: the nearer one only.
+    let t = column_with(&[(125.0, 135.0), (170.0, 180.0)], &[(110.0, 130.0), (300.0, 310.0)], 0.0, false);
+    let r = drag(&t, &settings(LineSpan::EachSide), (130.0, 140.0), 0.0, false);
+    assert_eq!(reach(&r, false), Some((110.0, 180.0)));
+    // The same with nothing touching: the nearest below is a guide, the nearest above a box.
+    let t = column_with(&[(60.0, 70.0), (160.0, 170.0)], &[(100.0, 120.0), (200.0, 210.0), (0.0, 5.0)], 0.0, false);
+    let r = drag(&t, &settings(LineSpan::EachSide), (130.0, 140.0), 0.0, false);
+    assert_eq!(reach(&r, false), Some((100.0, 170.0)));
+    // A guide that ends where the subject starts and one that overlaps it, both guides' spans from one place, with a box beyond: the lower start.
+    let t = column_with(&[(300.0, 310.0)], &[(90.0, 130.0), (128.0, 133.0)], 0.0, false);
+    let r = drag(&t, &settings(LineSpan::EachSide), (130.0, 140.0), 0.0, false);
+    assert_eq!(reach(&r, false), Some((90.0, 310.0)));
+}
+
+#[test]
 fn the_setting_changes_nothing_for_guides_with_no_extent_and_leaves_nearest_as_it_was() {
     // A guide runs for ever: there is no span to run to, and the mark is the subject's own side under every setting.
     let mut b = TargetsBuilder::new(Limits::default());
@@ -151,32 +180,45 @@ fn the_setting_changes_nothing_for_guides_with_no_extent_and_leaves_nearest_as_i
     assert_eq!(q(LineSpan::EachSide), q(LineSpan::Every));
 }
 
+/// A fixed seed, so that a run is the same run each time; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and each find is a case to read.
+fn config() -> ProptestConfig {
+    let number = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(default);
+    ProptestConfig {
+        cases: u32::try_from(number("CRAFT_SNAP_CASES", 1500)).unwrap_or(1500),
+        rng_seed: proptest::test_runner::RngSeed::Fixed(number("CRAFT_SNAP_SEED", 0xe5)),
+        ..ProptestConfig::default()
+    }
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1500))]
+    #![proptest_config(config())]
 
     /// The mark equals the one the definition gives from a scan of every span, on a lattice where touching and equal gaps come by themselves, and the same
     /// scene mirrored, and moved a long way, gives the mirrored and the moved mark.
     #[test]
     fn the_mark_is_what_a_scan_of_every_span_gives_mirrored_and_moved(
         spans in prop::collection::vec((-20i32..20, 1i32..8), 0..14),
+        guides in prop::collection::vec((-20i32..20, 1i32..8), 0..5),
         ext in (-20i32..20, 1i32..8),
         far in prop::sample::select(vec![0.0f64, 1.0e3, 1.0e6]),
     ) {
         let spans: Vec<(f64, f64)> = spans.iter().map(|(lo, len)| (f64::from(*lo), f64::from(*lo) + f64::from(*len))).collect();
+        let guides: Vec<(f64, f64)> = guides.iter().map(|(lo, len)| (f64::from(*lo), f64::from(*lo) + f64::from(*len))).collect();
+        let every_span: Vec<(f64, f64)> = spans.iter().chain(&guides).copied().collect();
         let ext = (f64::from(ext.0), f64::from(ext.0) + f64::from(ext.1));
-        let want = expected(&spans, ext);
+        let want = expected(&every_span, ext);
         let s = settings(LineSpan::EachSide);
-        let plain = drag(&column(&spans, 0.0, false), &s, ext, 0.0, false);
+        let plain = drag(&column_with(&spans, &guides, 0.0, false), &s, ext, 0.0, false);
         let got = reach(&plain, false);
         // With nothing on the line there is no mark to draw.
-        prop_assert_eq!(got, (!spans.is_empty()).then_some(want), "spans {:?} ext {:?}", spans, ext);
+        prop_assert_eq!(got, (!every_span.is_empty()).then_some(want), "spans {:?} guides {:?} ext {:?}", spans, guides, ext);
         // Mirrored: the same scene, y negated.
-        let mirrored = drag(&column(&spans, 0.0, true), &s, ext, 0.0, true);
+        let mirrored = drag(&column_with(&spans, &guides, 0.0, true), &s, ext, 0.0, true);
         prop_assert_eq!(reach(&mirrored, true), got);
         // The same scene far from the origin (along x, so that the extents stay exact): the same mark.
         if far > 0.0 {
             let moved = settings(LineSpan::EachSide);
-            let t = column(&spans, far, false);
+            let t = column_with(&spans, &guides, far, false);
             let q = query(
                 Subject::Box { frame: frame(45.0 + far, 0.5 * (ext.0 + ext.1), 10.0, ext.1 - ext.0, 0.0), bounds: None, u: Anchors { min: false, mid: false, max: true }, v: Anchors::NONE, own: &[] },
                 &moved,
@@ -186,8 +228,8 @@ proptest! {
             prop_assert_eq!(reach(&r, false), got);
         }
         // `Nearest` reaches a subset of what `EachSide` does, and `Every` a superset.
-        let near = reach(&drag(&column(&spans, 0.0, false), &settings(LineSpan::Nearest), ext, 0.0, false), false);
-        let every = reach(&drag(&column(&spans, 0.0, false), &settings(LineSpan::Every), ext, 0.0, false), false);
+        let near = reach(&drag(&column_with(&spans, &guides, 0.0, false), &settings(LineSpan::Nearest), ext, 0.0, false), false);
+        let every = reach(&drag(&column_with(&spans, &guides, 0.0, false), &settings(LineSpan::Every), ext, 0.0, false), false);
         if let (Some(g), Some(n), Some(e)) = (got, near, every) {
             prop_assert!(g.0 <= n.0 && n.1 <= g.1, "nearest {:?} within each side {:?}", n, g);
             prop_assert!(e.0 <= g.0 && g.1 <= e.1, "each side {:?} within every {:?}", g, e);
