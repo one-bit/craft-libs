@@ -533,3 +533,134 @@ fn note(cx: &mut Ctx<'_>, g: &crate::index::Gather<'_>) {
         cx.work.cut(if g.visited >= u64::from(cx.budget().window_visits) { Cuts::WINDOW_VISITS } else { Cuts::CANDIDATES });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::budget::Budget;
+    use crate::query::{Constraint, Query, Rounding, Subject};
+    use crate::settings::Settings;
+    use crate::targets::{Limits, TargetsBuilder};
+
+    fn strips(subject: &[Point], tr: Travel, span: f64, cap: f64) -> (Vec<Strip>, bool, f64) {
+        let t = TargetsBuilder::new(Limits::default()).build();
+        let s = Settings::default();
+        let q = Query {
+            subject: Subject::Point { at: subject.first().copied().unwrap_or(Point::ORIGIN), base: None },
+            zoom: 1.0,
+            settings: &s,
+            constraint: Constraint::None,
+            rounding: Rounding::None,
+            lattices: &[],
+            view: None,
+            budget: Budget::default(),
+        };
+        let cx = Ctx::new(&t, &q);
+        let tol = cx.co.tol(5.0, 5.0);
+        let (strips, cut) = travel_strips(&cx, subject, tr, span, cap);
+        (strips, cut, tol)
+    }
+
+    fn near(s: &Strip) -> (f64, f64) {
+        s.near.map(|p| (p.x, p.y)).unwrap_or((f64::NAN, f64::NAN))
+    }
+
+    #[test]
+    fn a_held_move_reads_a_reach_either_side_of_the_places_on_a_line_from_their_middle() {
+        let tr = Travel { axis: Axis::X, way: Way::Both };
+        // Three places on two lines: y = 4 with one at x 0, and y = 5 with two at x 0 and 2.
+        let (list, cut, tol) = strips(&[Point::new(2.0, 5.0), Point::new(0.0, 4.0), Point::new(0.0, 5.0)], tr, 6.0, 1.0e9);
+        assert!(!cut);
+        assert_eq!(list.len(), 2);
+        let r0 = list[0].rect;
+        assert_eq!((r0.x0, r0.x1), (-6.0, 6.0));
+        assert!((r0.y0 - (4.0 - 2.0 * tol)).abs() < 1e-12 && (r0.y1 - (4.0 + 2.0 * tol)).abs() < 1e-12, "{r0:?}");
+        assert_eq!(near(&list[0]).0, 0.0);
+        let r1 = list[1].rect;
+        assert_eq!((r1.x0, r1.x1), (-6.0, 8.0), "from 6 before the first place to 6 past the last");
+        assert!((r1.y0 - (5.0 - 2.0 * tol)).abs() < 1e-12 && (r1.y1 - (5.0 + 2.0 * tol)).abs() < 1e-12, "{r1:?}");
+        assert_eq!(near(&list[1]).0, 1.0, "the middle of the places on the line");
+        assert!((near(&list[1]).1 - 5.0).abs() < 1e-12);
+        // Along y the strips are tall and thin the other way, in the order of the lines across.
+        let tr = Travel { axis: Axis::Y, way: Way::Both };
+        let (list, _, _) = strips(&[Point::new(7.0, 1.0), Point::new(3.0, 3.0), Point::new(3.0, 1.0)], tr, 2.0, 1.0e9);
+        assert_eq!(list.len(), 2);
+        assert_eq!((list[0].rect.y0, list[0].rect.y1), (-1.0, 5.0));
+        assert!(list[0].rect.x0 < 3.0 && list[0].rect.x1 > 3.0 && list[0].rect.x1 - list[0].rect.x0 < 1.0e-6);
+        assert_eq!(near(&list[0]), (list[0].near.map_or(f64::NAN, |p| p.x), 2.0));
+        assert_eq!((list[1].rect.y0, list[1].rect.y1), (-1.0, 3.0));
+        assert!(list[1].rect.x0 < 7.0 && list[1].rect.x1 > 7.0);
+    }
+
+    #[test]
+    fn places_that_are_one_place_across_the_axis_share_a_strip_and_two_that_are_not_do_not() {
+        let tr = Travel { axis: Axis::X, way: Way::Both };
+        let (list, _, tol) =
+            strips(&[Point::new(0.0, 5.0), Point::new(1.0, 5.0 + 0.5 * tol_of()), Point::new(2.0, 5.0 + 4.0 * tol_of())], tr, 3.0, 1.0e9);
+        assert_eq!(list.len(), 2, "5 and 5 + half the rule are one line, 5 + four times it another");
+        assert!(list[0].rect.y1 >= 5.0 + 0.5 * tol_of() + tol, "{:?}", list[0].rect);
+        assert_eq!((list[0].rect.x0, list[0].rect.x1), (-3.0, 4.0));
+        assert_eq!((list[1].rect.x0, list[1].rect.x1), (-1.0, 5.0));
+    }
+
+    /// The same-place rule at 5 in a query on a point there.
+    fn tol_of() -> f64 {
+        let t = TargetsBuilder::new(Limits::default()).build();
+        let s = Settings::default();
+        let q = Query {
+            subject: Subject::Point { at: Point::new(5.0, 5.0), base: None },
+            zoom: 1.0,
+            settings: &s,
+            constraint: Constraint::None,
+            rounding: Rounding::None,
+            lattices: &[],
+            view: None,
+            budget: Budget::default(),
+        };
+        Ctx::new(&t, &q).co.tol(5.0, 5.0)
+    }
+
+    #[test]
+    fn a_nudge_reads_ahead_from_its_trailing_place_or_its_leading_one_as_far_as_it_may_and_says_when_that_is_less_than_it_asked() {
+        let places = [Point::new(1.0, 3.0), Point::new(3.0, 3.0)];
+        // Forward along y, 10 asked, 4 allowed: from where the lowest place is to 4 past the highest, and the window was cut.
+        let (up, cut, _) =
+            strips(&[Point::new(3.0, 1.0), Point::new(3.0, 3.0)], Travel { axis: Axis::Y, way: Way::Ahead { sign: 1.0, limit: 10.0 } }, 10.0, 4.0);
+        assert!(cut);
+        assert_eq!((up[0].rect.y0, up[0].rect.y1), (1.0, 7.0));
+        assert_eq!(near(&up[0]).1, 1.0, "read from the trailing place");
+        // Backward: from 4 before the lowest to the highest, read from the leading place.
+        let (down, cut, _) =
+            strips(&[Point::new(3.0, 1.0), Point::new(3.0, 3.0)], Travel { axis: Axis::Y, way: Way::Ahead { sign: -1.0, limit: 10.0 } }, 10.0, 4.0);
+        assert!(cut);
+        assert_eq!((down[0].rect.y0, down[0].rect.y1), (-3.0, 3.0));
+        assert_eq!(near(&down[0]).1, 3.0);
+        // As far as asked, when that is not more than it may: not cut, and the window ends where it was asked to.
+        let (short, cut, _) = strips(&places, Travel { axis: Axis::X, way: Way::Ahead { sign: 1.0, limit: 2.0 } }, 2.0, 4.0);
+        assert!(!cut);
+        assert_eq!((short[0].rect.x0, short[0].rect.x1), (1.0, 5.0));
+        // A limit that is exactly what may be read is not cut either.
+        let (exact, cut, _) = strips(&places, Travel { axis: Axis::X, way: Way::Ahead { sign: 1.0, limit: 4.0 } }, 4.0, 4.0);
+        assert!(!cut && exact[0].rect.x1 == 7.0);
+    }
+
+    #[test]
+    fn nine_lines_are_joined_into_four_strips_cut_at_the_widest_gaps() {
+        let tr = Travel { axis: Axis::X, way: Way::Both };
+        let ys = [4.0, 5.0, 6.0, 20.0, 21.0, 40.0, 41.0, 80.0, 81.0];
+        let subject: Vec<Point> = ys.iter().map(|y| Point::new(0.0, *y)).collect();
+        let (list, _, _) = strips(&subject, tr, 1.0, 1.0e9);
+        let spans: Vec<(f64, f64)> = list.iter().map(|s| (s.rect.y0.round(), s.rect.y1.round())).collect();
+        assert_eq!(spans, vec![(4.0, 6.0), (20.0, 21.0), (40.0, 41.0), (80.0, 81.0)]);
+        // The gaps are the widest by their width, whatever the order the places came in, and the earlier of two equal gaps is cut first.
+        let (rev, _, _) = strips(&subject.iter().rev().copied().collect::<Vec<_>>(), tr, 1.0, 1.0e9);
+        assert_eq!(rev.iter().map(|s| (s.rect.y0.round(), s.rect.y1.round())).collect::<Vec<_>>(), spans);
+        // Five lines a unit apart: four strips, the first two lines joined (the gaps are all equal and the earlier ones cut).
+        let flat: Vec<Point> = (0..5).map(|i| Point::new(0.0, f64::from(i))).collect();
+        let (list, _, _) = strips(&flat, tr, 1.0, 1.0e9);
+        assert_eq!(
+            list.iter().map(|s| (s.rect.y0.round(), s.rect.y1.round())).collect::<Vec<_>>(),
+            vec![(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 4.0)]
+        );
+    }
+}

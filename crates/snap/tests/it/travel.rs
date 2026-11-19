@@ -238,6 +238,25 @@ mod held_move {
     }
 
     #[test]
+    fn places_of_no_reach_pull_nothing_not_even_from_where_the_subject_already_is() {
+        // A place exactly under the box's right middle, every kind of place with no reach: no window is read, and nothing pulls, held or free.
+        let t = targets(&[(9, 2.0, 5.0)], &[]);
+        let mut s = on_line();
+        for k in [Kind::Point(0), Kind::Corner, Kind::SideMiddle, Kind::Vertex, Kind::Midpoint, Kind::Nearest, Kind::Intersection] {
+            s.kinds.set(k, craft_snap::KindRule { on: true, reach: craft_snap::Reach::Screen(0.0), priority: 1, scope: craft_snap::Scope::All });
+        }
+        let r = held(&t, &s, subject(), Axis::X);
+        assert!(r.hits.is_empty() && r.work.points == 0 && r.work.visited == 0, "{r:?}");
+        let q = query(box_subject(subject()), &s);
+        let free = run(&t, &q);
+        assert!(free.hits.is_empty() && free.work.points == 0, "{free:?}");
+        // With a reach that is more than nothing the same place is met, at no distance.
+        let s = on_line();
+        let r = held(&t, &s, subject(), Axis::X);
+        assert_eq!((r.delta.x, r.hits.len(), r.hits[0].distance), (0.0, 1, 0.0));
+    }
+
+    #[test]
     fn a_vertex_wins_a_near_tie_by_fifteen_percent_of_its_reach_in_a_held_move_and_in_a_free_one() {
         // A place of the app 4 from the box's right middle, and the end of an outline `x - 2` from it, on the same line: the end wins by 15% of the reach of
         // 6 (0.9), so at 4.5 it does and at 5 it does not. The same for a move that is not held.
