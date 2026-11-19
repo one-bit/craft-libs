@@ -912,3 +912,82 @@ mod hostile {
         }
     }
 }
+
+/// How many windows a query reads for places on its lines of travel, and what an object that meets several of them costs.
+mod windows {
+    use super::*;
+
+    #[test]
+    fn a_turned_box_and_the_places_that_move_with_it_share_at_most_four_strips_of_each_grid() {
+        // A turned box has nine lines of travel, and five places that move with it are on five more: fourteen lines, joined into four strips of each of
+        // the two grids, so that eight of the query's sixteen windows are for places and not fourteen of each.
+        let t = targets(&[(1, 7.0, 5.5), (2, 9.0, 40.0)], &[(10, frame(8.0, 5.0, 2.0, 2.0, 0.0))]);
+        let own = [Point::new(0.0, 20.0), Point::new(0.0, 30.0), Point::new(0.0, 40.0), Point::new(0.0, 50.0), Point::new(0.0, 60.0)];
+        let f = frame(0.0, 5.0, 4.0, 2.0, 0.5);
+        let with = |s: &Settings| {
+            let q = Query {
+                constraint: Constraint::Axis(Axis::X),
+                ..query(Subject::Box { frame: f, bounds: None, u: Anchors::ALL, v: Anchors::ALL, own: &own }, s)
+            };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+            r
+        };
+        let (on, off) = (with(&on_line()), with(&Settings::default()));
+        assert_eq!(on.work.gathers - off.work.gathers, 8, "{:?} {:?}", on.work, off.work);
+        // The same without the five: nine lines, still four strips of each. An unturned box has three lines, and three strips of each grid.
+        let (on_s, off_s) = (on_line(), Settings::default());
+        let gathers = |s: &Settings, f: TurnedBox| {
+            let q = Query { constraint: Constraint::Axis(Axis::X), ..query(box_subject(f), s) };
+            run(&t, &q).work.gathers
+        };
+        assert_eq!(gathers(&on_s, f) - gathers(&off_s, f), 8);
+        let flat = frame(0.0, 5.0, 4.0, 2.0, 0.0);
+        assert_eq!(gathers(&on_s, flat) - gathers(&off_s, flat), 6);
+    }
+
+    #[test]
+    fn an_object_that_meets_several_strips_is_looked_at_once() {
+        // A box 2 by 2 at (60, 5) meets all three lines of the box at (50, 5): its eight places are weighed once, and its detail asked for once.
+        let t = targets(&[], &[(1, frame(58.0, 5.0, 2.0, 2.0, 0.0))]);
+        let s = on_line();
+        let q = Query { constraint: Constraint::Axis(Axis::X), ..query(box_subject(frame(50.0, 5.0, 4.0, 2.0, 0.0)), &s) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert_eq!((r.work.points, r.work.outlines), (8, 1), "{:?}", r.work);
+        assert_eq!(r.delta.x, 5.0, "the box's right middle (52, 5) goes to the other's left middle (57, 5)");
+    }
+
+    #[test]
+    fn a_nudge_looks_no_farther_than_the_line_it_would_stop_on() {
+        // A guide 10 ahead of the box's right side, and places beyond it: the places are not looked at (no bucket entry visited for them).
+        let places: Vec<(u64, f64, f64)> = (0..200u64).map(|i| (i + 1, 20.0 + i as f64 * 0.1, 5.0)).collect();
+        let mut b = TargetsBuilder::new(Limits::default());
+        for (i, x, y) in &places {
+            b.point(Some(Id(*i)), Point::new(*x, *y), Kind::Point(0), *i as u32).unwrap();
+        }
+        b.line(Some(Id(1)), Axis::X, 12.0, None, Kind::Guide).unwrap();
+        let t = b.build();
+        let frame = frame(0.0, 5.0, 4.0, 2.0, 0.0);
+        let (on_s, off_s) = (on_line(), Settings::default());
+        let nudged = |t: &Targets, s: &Settings| {
+            let q = query(Subject::Nudge { frame, bounds: None, axis: Axis::X, forward: true, reach: NudgeReach::Anywhere, fallback: 0.5 }, s);
+            let r = run(t, &q);
+            r.check(t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+            r
+        };
+        let (on, off) = (nudged(&t, &on_s), nudged(&t, &off_s));
+        assert_eq!((on.delta.x, on.hits[0].kind), (10.0, Kind::Guide));
+        assert_eq!((on.work.visited, on.work.points, on.work.truncated), (off.work.visited, 0, false), "{:?}", on.work);
+        // With the guide beyond the places, they are looked at and the nearest stops it.
+        let mut b = TargetsBuilder::new(Limits::default());
+        for (i, x, y) in &places {
+            b.point(Some(Id(*i)), Point::new(*x, *y), Kind::Point(0), *i as u32).unwrap();
+        }
+        b.line(Some(Id(1)), Axis::X, 40.0, None, Kind::Guide).unwrap();
+        let t = b.build();
+        let r = nudged(&t, &on_s);
+        assert_eq!((r.delta.x, r.hits[0].kind), (18.0, Kind::Point(0)));
+        assert!(r.work.points >= 1 && r.work.visited > 0);
+    }
+}
