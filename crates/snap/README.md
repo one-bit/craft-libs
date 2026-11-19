@@ -144,6 +144,9 @@ A line of travel is one strip of each grid (at most four strips, so a turned box
 how near they lie), and each strip is one window of the 16 a query has. The same scene at 1e6, 1e9 and 1e11 gives the same hits and the same
 counts. Timed beside forty places in a release build (`--ignored timed`): a held move among 100,000 about 25 times, a nudge about 3 times.
 
+A line mark under `LineSpan::EachSide` over a hundred thousand coincident members costs five bisections of 17 steps more than `Every` does (89 bisection
+steps against 4, *measured*, the same one entry walked): the nearest member on each side is found by bisection, not by a walk over the members.
+
 A query a hundred thousand objects far from the pointer costs the same bisections as one beside it. One object in view among 100,000 of the same
 width outside it is found by one bisection, after a counted scan of 100,001 bounds when the `ViewIndex` is made.
 

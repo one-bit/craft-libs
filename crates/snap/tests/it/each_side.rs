@@ -273,9 +273,8 @@ fn a_hundred_thousand_members_at_one_place_cost_a_few_bisections_and_reach_the_n
     assert!(el <= 1.0 && eh >= 299_990.0);
     let (nl, nh) = reach(&nearest, false).unwrap();
     assert!(lo <= nl && nh <= hi);
-    // The same entries are walked, and the members cost bisections: five an entry, 17 steps for 100,000 members each.
+    // The same entry is walked, and its members cost five bisections of 17 steps each (100,000 members): 4 steps and 89.
     assert_eq!(each.work.line_steps, every.work.line_steps);
-    assert!(each.work.bisect_steps <= every.work.bisect_steps + 5 * 17 * 4, "{} against {}", each.work.bisect_steps, every.work.bisect_steps);
-    assert!(each.work.bisect_steps > every.work.bisect_steps, "the five bisections of the members are charged");
+    assert_eq!((every.work.bisect_steps, nearest.work.bisect_steps, each.work.bisect_steps), (4, 4, 4 + 5 * 17), "{:?}", each.work);
     assert!(!each.work.truncated, "{:?}", each.work);
 }
