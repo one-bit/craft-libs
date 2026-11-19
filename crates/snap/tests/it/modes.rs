@@ -752,6 +752,19 @@ mod nudge_ahead {
     }
 
     #[test]
+    fn a_lattice_line_whose_number_is_past_two_to_the_fifty_second_is_no_stop() {
+        // A pitch of 1e-300 puts the box's sides (at -7, 3 and 13) on line numbers of 1e300: the numbers cannot tell one line from the next, and the line they
+        // name is the side's own place to the last bits. No stop, the fallback (and not a stop a few femtounits away).
+        let t = scene(&[], &[], &[]);
+        let s = only_lines();
+        let f = frame(3.0, 0.0, 20.0, 4.0, 0.0);
+        for pitch in [1.0e-300, 1.0e-250, 1.0e-200] {
+            let r = nudge(&t, &s, &[grid(pitch)], f, Axis::X, true);
+            assert_eq!((r.delta.x, r.hits.len()), (0.5, 0), "pitch {pitch:e}: {r:?}");
+        }
+    }
+
+    #[test]
     fn a_guide_behind_stops_a_backward_nudge_and_one_just_past_the_tolerance_counts_as_ahead() {
         let s = only_lines();
         let f = frame(0.0, 0.0, 20.0, 4.0, 0.0);
