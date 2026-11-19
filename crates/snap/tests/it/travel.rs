@@ -765,3 +765,150 @@ mod against_a_scan {
         }
     }
 }
+
+/// The costs of the worst inputs: every cap counted, beside a yardstick of the same query with places left out (`Ignore`), and of the same places a few.
+mod hostile {
+    use craft_snap::{Cuts, Work};
+
+    use super::*;
+
+    /// `n` places along the line y = 5 + off: 100,000 of them 1e-3 apart across a box at x = 50, or 40 of them 2e-2 apart beside it. None is exactly on
+    /// a place of the box.
+    fn along_the_line(n: u64, off: f64) -> Targets {
+        let (from, pitch) = if n > 1_000 { (5.0e-4, 1.0e-3) } else { (49.0005, 2.0e-2) };
+        let places: Vec<(u64, f64, f64)> = (0..n).map(|i| (i + 1, from + i as f64 * pitch, 5.0 + off)).collect();
+        targets(&places, &[])
+    }
+
+    /// A box 4 by 2 at (50, 5): its places are on the lines y = 4, 5 and 6.
+    fn subject() -> TurnedBox {
+        frame(50.0, 5.0, 4.0, 2.0, 0.0)
+    }
+
+    fn held_with(t: &Targets, s: &Settings) -> Snapped {
+        held(t, s, subject(), Axis::X)
+    }
+
+    fn nudge_with(t: &Targets, s: &Settings) -> Snapped {
+        let q = query(Subject::Nudge { frame: subject(), bounds: None, axis: Axis::X, forward: true, reach: NudgeReach::Anywhere, fallback: 0.5 }, s);
+        let r = run(t, &q);
+        r.check(t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+        r
+    }
+
+    /// What the places cost on top of the query without them: the bucket entries visited, the places weighed, the objects kept.
+    fn extra(on: &Work, off: &Work) -> (u64, u64, u64) {
+        (on.visited - off.visited, on.points - off.points, on.candidates - off.candidates)
+    }
+
+    #[test]
+    fn a_hundred_thousand_places_on_the_line_cost_what_the_caps_say_and_the_result_is_still_the_nearest() {
+        let (few, many) = (along_the_line(40, 0.0), along_the_line(100_000, 0.0));
+        let off = Settings::default();
+        let (r_few, r) = (held_with(&few, &on_line()), held_with(&many, &on_line()));
+        // The nearest place to the subject's places on the line: the box's centre is 5e-4 from the place beside it.
+        assert!(r.delta.x.abs() <= 6.0e-4 && r.hits.len() == 1, "{r:?}");
+        // Three lines of travel, one strip each. A strip visits at most the cap of bucket entries and keeps at most the candidate cap of places, whatever
+        // lies on the line; the box's line meets the bucket row of the line above it too, so two strips read the crowd (measured).
+        assert_eq!(extra(&r.work, &held_with(&many, &off).work), (2 * 4_096, 64, 64), "{:?}", r.work);
+        assert!(
+            r.work.cut.has(Cuts::WINDOW_VISITS) && r.work.truncated,
+            "more places on the line than the caps look at, and it says so: {:?}",
+            r.work
+        );
+        // The few cost what they hold, and are all of them looked at: the cost does not grow with the places past the caps.
+        assert_eq!(extra(&r_few.work, &held_with(&few, &off).work), (40 * 2, 40, 40), "{:?}", r_few.work);
+        assert!(!r_few.work.truncated);
+        assert!(r.delta.x.abs() <= 5.0e-4 + 1e-12);
+        // Of the forty (49.0005 to 49.7805) the nearest to a place of the box is the last, 0.2195 short of its centre at 50.
+        assert!((r_few.delta.x + 0.2195).abs() < 1e-9, "{r_few:?}");
+    }
+
+    #[test]
+    fn a_hundred_thousand_places_on_the_line_of_a_nudge_cost_what_the_caps_say() {
+        let (few, many) = (along_the_line(40, 0.0), along_the_line(100_000, 0.0));
+        let off = Settings::default();
+        let (r_few, r) = (nudge_with(&few, &on_line()), nudge_with(&many, &on_line()));
+        assert!(r.delta.x > 0.0 && r.delta.x <= 1.0e-3 + 1e-9 && r.hits.len() == 1, "the first place ahead of one of the box's places: {r:?}");
+        assert_eq!(extra(&r.work, &nudge_with(&many, &off).work), (2 * 4_096, 64, 64), "{:?}", r.work);
+        assert_eq!(extra(&r_few.work, &nudge_with(&few, &off).work), (40 * 2, 40, 40), "{:?}", r_few.work);
+        assert!(r_few.hits.len() == 1 && r_few.delta.x > 0.0);
+    }
+
+    #[test]
+    fn places_a_hair_off_the_line_are_looked_at_for_what_the_caps_say_and_none_is_met() {
+        // Beyond twice the same-place rule: not even in a strip. Between once and twice: in one, weighed, and not on the line. Within it: on it.
+        let off = Settings::default();
+        for (hair, meets, visited) in [(5.0e-9, false, 4_096), (1.5e-9, false, 2 * 4_096), (5.0e-10, true, 2 * 4_096)] {
+            let t = along_the_line(100_000, hair);
+            let r = held_with(&t, &on_line());
+            let e = extra(&r.work, &held_with(&t, &off).work);
+            assert_eq!(!r.hits.is_empty(), meets, "{hair:e}: {r:?}");
+            assert_eq!(e.0, visited, "{hair:e}: {:?}", r.work);
+            assert!(e.1 <= 64 && e.2 <= 64 && (e.1 > 0) == (hair < 4.0e-9), "{hair:e}: {e:?}");
+            let n = nudge_with(&t, &on_line());
+            assert_eq!(n.hits.len() == 1, meets, "{hair:e}: {n:?}");
+            assert_eq!(extra(&n.work, &nudge_with(&t, &off).work).0, visited, "{hair:e}");
+        }
+    }
+
+    #[test]
+    fn a_hundred_thousand_boxes_whose_places_are_on_the_lines_cost_what_the_caps_say() {
+        // Boxes 0.002 wide and 2 high whose corners and middles are on the three lines of the box at (50, 5), all within its reach, 100,000 of them.
+        let objs: Vec<(u64, TurnedBox)> = (0..100_000u64).map(|i| (i, frame(50.5 + (i % 1000) as f64 * 0.004, 5.0, 0.002, 2.0, 0.0))).collect();
+        let t = targets(&[], &objs);
+        let with = |s: &Settings| {
+            let q = Query { constraint: Constraint::Axis(Axis::X), ..query(box_subject(subject()), s) };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+            r
+        };
+        let (on, off) = (with(&on_line()), with(&Settings::default()));
+        eprintln!("boxes on {:?}\nboxes off {:?}", on.work, off.work);
+        assert!(on.hits.len() == 1 && (on.delta.x - (0.5 - 0.001)).abs() < 5e-3, "{:?}", on.hits);
+        let e = extra(&on.work, &off.work);
+        assert!(e.0 <= 3 * 4_096 && e.1 <= 4_096 && e.2 <= 3 * 64 && on.work.outlines <= 16, "{:?}", on.work);
+        assert!(on.work.truncated, "{:?}", on.work);
+    }
+
+    #[test]
+    fn the_same_scene_far_from_the_origin_gives_the_same_result_and_costs_the_same() {
+        let at = |shift: f64| {
+            let places: Vec<(u64, f64, f64)> =
+                (0..12u64).map(|i| (i + 1, shift + 6.0 + i as f64 * 0.5, shift + 5.0 + if i % 3 == 0 { 0.0 } else { 1.0 })).collect();
+            let t = targets(&places, &[(100, frame(shift + 15.0, shift + 5.0, 2.0, 2.0, 0.0))]);
+            let f = frame(shift + 2.0, shift + 5.0, 4.0, 2.0, 0.0);
+            let s = on_line();
+            let h = Query { constraint: Constraint::Axis(Axis::X), ..query(box_subject(f), &s) };
+            let hr = run(&t, &h);
+            hr.check(&t, &h).unwrap_or_else(|b| panic!("{shift:e}: {b:?}\n{hr:?}"));
+            let n = query(Subject::Nudge { frame: f, bounds: None, axis: Axis::X, forward: true, reach: NudgeReach::Anywhere, fallback: 0.5 }, &s);
+            let nr = run(&t, &n);
+            nr.check(&t, &n).unwrap_or_else(|b| panic!("{shift:e}: {b:?}\n{nr:?}"));
+            (hr, nr)
+        };
+        let (h0, n0) = at(0.0);
+        assert!(!h0.hits.is_empty() && !n0.hits.is_empty(), "{h0:?}\n{n0:?}");
+        for shift in [1.0e6, 1.0e9, 1.0e11] {
+            let (h, n) = at(shift);
+            let tol = 1e-9 + shift * 4.0e-15;
+            assert!(
+                (h.delta - h0.delta).hypot() <= tol && (n.delta - n0.delta).hypot() <= tol,
+                "{shift:e}: {:?} {:?} / {:?} {:?}",
+                h.delta,
+                h0.delta,
+                n.delta,
+                n0.delta
+            );
+            assert_eq!(h.hits.len(), h0.hits.len());
+            assert_eq!(h.marks.len(), h0.marks.len(), "{shift:e}");
+            for (a, b) in [(&h.work, &h0.work), (&n.work, &n0.work)] {
+                assert_eq!(
+                    (a.visited, a.points, a.gathers, a.examined, a.candidates),
+                    (b.visited, b.points, b.gathers, b.examined, b.candidates),
+                    "{shift:e}"
+                );
+            }
+        }
+    }
+}

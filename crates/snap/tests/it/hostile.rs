@@ -545,6 +545,22 @@ mod timed {
 
     #[test]
     #[ignore = "real time"]
+    fn timed_a_hundred_thousand_places_on_the_line_of_a_held_move_and_a_nudge_beside_forty() {
+        let s = crate::travel::on_line();
+        let on_a_line = |n: u64, from: f64, pitch: f64| {
+            let places: Vec<(u64, f64, f64)> = (0..n).map(|i| (i + 1, from + i as f64 * pitch, 5.0)).collect();
+            crate::travel::targets(&places, &[])
+        };
+        let (few, many) = (on_a_line(40, 49.0005, 2.0e-2), on_a_line(100_000, 5.0e-4, 1.0e-3));
+        let f = frame(50.0, 5.0, 4.0, 2.0, 0.0);
+        let held = craft_snap::Query { constraint: Constraint::Axis(Axis::X), ..query(box_subject(f), &s) };
+        compare("a held move among places", (&few, &held), (&many, &held), 40.0);
+        let nudge = query(Subject::Nudge { frame: f, bounds: None, axis: Axis::X, forward: true, reach: NudgeReach::Anywhere, fallback: 0.5 }, &s);
+        compare("a nudge among places", (&few, &nudge), (&many, &nudge), 40.0);
+    }
+
+    #[test]
+    #[ignore = "real time"]
     fn timed_a_box_wider_than_its_room_and_a_resize_that_would_collapse_beside_ordinary_ones() {
         let s = only(&[Kind::Spacing]);
         let two = scene(&[(1, frame(5.0, 0.0, 10.0, 10.0, 0.0)), (2, frame(35.0, 0.0, 10.0, 10.0, 0.0))], &[], &[]);
