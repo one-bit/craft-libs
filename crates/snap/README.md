@@ -32,8 +32,19 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
   midpoint, nearest, intersection, tangent, perpendicular on `BezPath`s), **lattices** and the zoom-following pitch helpers (`grid::doubling`,
   `grid::one_two_five`), and **label placement** (`labels::place`) are in the crate. The crate does not format numbers: an app formats each
   value in its own unit.
-- **Nudge** goes along a page axis to the first target strictly ahead (a line of any kind, a lattice line, or the next place that repeats a gap),
-  within one step (`NudgeReach::Within`) or however far (`Anywhere`), else by a fallback distance.
+- **Nudge** goes along a page axis to the first target strictly ahead (a line of any kind, a lattice line, the next place that repeats a gap, and,
+  with `Settings::nudge_places`, a place on the line one of its places travels along), within one step (`NudgeReach::Within`) or however far
+  (`Anywhere`), else by a fallback distance. The nearest stop wins, whatever its kind.
+- **Places on a line of travel.** A subject that travels along one page axis (a move held to it by `Constraint::Axis`, or a nudge) has a line
+  of travel for each of its places: the places that are the same across the axis, by the same-place rule, travel along one. A target place
+  (the app's own, the corners and side middles of other boxes, and what the detail source gives: connection points, vertices, midpoints,
+  crossings of outlines) meets it only where it lies on one of those lines, and the subject lands on it, exactly, with the other delta 0 to the bit.
+  `Settings::locked_places` turns this on for a held move: a place within the reach of its kind along the line, either way, pulls, and takes
+  the degree before any line does (`Places` decides it as for any other move). `Settings::nudge_places` turns it on for a nudge: the first place
+  strictly ahead on a line of travel within the nudge's own reach is a stop, and it is the stop if it comes before the line the nudge would
+  stop on (a tie goes to the lower priority number, and to the line when those are equal). Both are `TravelPlaces::Ignore` by default, as the
+  crate was before them: no place pulls a held move or stops a nudge. The subject's places are the nine of its box (corners, side middles,
+  centre) and, for a held move, the `own` places that move with it; a place off every line of travel is not a candidate.
 - **Bounded work, reported.** Every cap is charged in real units before the work it stands for; `Snapped::work` holds the counts, the caps met
   (`cut`), the indexes made, and whether anything was left out (`truncated`).
 
@@ -78,8 +89,12 @@ with another gets no rotation match, and its work says `truncated` with the `ANG
 
 - **A resize has no equal-gap candidates.** `Subject::Edges` snaps to lines, places and sizes, not to a gap that repeats a neighbour's; a move does
   both.
-- **Places do not pull under an axis lock or a ray.** `Constraint::Axis` and `Constraint::Ray` solve against lines only; the places are not tried
-  along the line.
+- **Places pull a held move only on a page axis, and only when asked.** `Settings::locked_places` makes `Constraint::Axis` meet the places on the
+  lines its places travel along; `Constraint::Ray` solves against lines only. A place that is near a line of travel but not on it (past the
+  same-place rule) is not a candidate, because the subject could not land on it: nothing is drawn that the subject does not land on.
+- **A nudge's places are the nine of its box.** `Subject::Nudge` carries no `own` places, so connection points that move with the shape are not
+  met by it; and a place is looked for as far as the buckets of its grid allow, 46 of the finest grid's from the subject (a window past that is
+  cut, and a nudge that looks as far as it can with no line nearer says so with the `WINDOW_VISITS` cut), or only up to the line it would stop on.
 - **A scope that is not `All` is read by `Kind::Size` only.** `KindRule::scope` on any other kind looks at every object.
 - **Only the nearest line of each kind and side is a candidate.** If a verification (a resize that would leave no box, a row that changed) drops it,
   the next nearest line of the same kind is not tried. The result always satisfies `Snapped::check`; it is not always the best one there was.
@@ -113,6 +128,21 @@ with another gets no rotation match, and its work says `truncated` with the `ANG
 | | 100,000 | 1,200,000 | 438 | 2 | 0 |
 | | 100,000 at 100,000 different angles | 1,200,000 | 978 | 2 | 0 |
 | All kinds on, 5,000 objects | 5,000 | 60,000 | 366 | 2 | 9 (281 entries visited) |
+
+Places on a line of travel (`Settings::locked_places`, `nudge_places`; *measured*, the extra work over the same query with places left out):
+
+| Input | Bucket entries visited | Places weighed | Objects kept |
+|---|---|---|---|
+| a held move, 40 places on its line | 80 | 40 | 40 |
+| a held move, 100,000 places on its line | 8,192 (two strips at the cap of 4,096) | 64 | 64 |
+| a nudge, 100,000 places on its line | 8,192 | 64 | 64 |
+| 100,000 places a hair off the line, beyond twice the same-place rule | 4,096 | 0 | 0 |
+| 100,000 places between once and twice the rule, or within it | 8,192 | 64 | 64 |
+| a held move, 100,000 boxes whose corners and middles are on its lines | 12,288 (three strips) | 512 | 192 (of 100,000), 16 outlines asked |
+
+A line of travel is one strip of each grid (at most four strips, so a turned box's nine lines and the lines of what moves with it are joined by
+how near they lie), and each strip is one window of the 16 a query has. The same scene at 1e6, 1e9 and 1e11 gives the same hits and the same
+counts. Timed beside forty places in a release build (`--ignored timed`): a held move among 100,000 about 25 times, a nudge about 3 times.
 
 A query a hundred thousand objects far from the pointer costs the same bisections as one beside it. One object in view among 100,000 of the same
 width outside it is found by one bisection, after a counted scan of 100,001 bounds when the `ViewIndex` is made.
@@ -155,8 +185,9 @@ the directions and the pairing of up to four of them; the constraint solver; the
   about a fixed point), a size match is a degree's candidate too, and a candidate that does not hold on the final extents is dropped.
 - **DesignCraft** passes in order and the first hit wins; here the settings choose. Its size match reads every item; here the lengths are in
   sorted arrays (or in a `ViewIndex`). Its rotation tolerance is the same, `atan(zone / radius)`.
-- **EffectCraft's** place pulled as a line across a locked drag is not ported: under an axis lock or a ray only lines pull. Its bias of a place
-  against a pair of lines is `Places::Compete`.
+- **EffectCraft's** place pulled as a line across a locked drag is not ported as a line: a place pulls a held move only where the subject can land
+  on it, on the line one of its places travels along (`Settings::locked_places`), and a ray still meets lines only. Its bias of a place against a
+  pair of lines is `Places::Compete`.
 - **PhotoCraft** applies its Shift lock after the snap; here a constraint is solved inside it.
 
 ## Tests
@@ -176,4 +207,11 @@ the directions and the pairing of up to four of them; the constraint solver; the
   moved to 1e3, 1e6, 1e9 and 1e11 gives the same hits and marks (to 1e9; at 1e11 the result is checked, for candidates closer than the numbers there
   can tell apart are told apart by the noise). The seed is fixed; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and a find is a
   case to read.
+- Places on a line of travel, against a scan of every place and every place of the subject: the held move goes to the nearest place within reach,
+  the nudge to the nearest strictly ahead, on a lattice where places meet lines by themselves and for boxes turned by 0, a quarter and 0.5 radians
+  (1,500 cases each), and the same scene mirrored, moved to 1e3, 1e6 and 1e9, and turned by a quarter gives the same result. Counted costs for
+  100,000 places on the line, a hair off it and far from the origin. The invariant (`Snapped::check`) runs with both settings on.
+- A line mark from the nearest target on each side (`LineSpan::EachSide`): its spans against a scan of every span, mirrored and moved, a hundred
+  thousand members at one place (five bisections an entry), and the check shown to fire on a segment that stops short, runs on, or reaches one
+  side only.
 - Order, mirror, quarter-turn, angle-0 and zoom-boundary checks, a scene moved to 1e6, 1e9 and 1e11 (the same hits and marks), and the index against a scan of every line (anywhere on the page and within a reach across).

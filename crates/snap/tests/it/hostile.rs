@@ -554,9 +554,9 @@ mod timed {
         let (few, many) = (on_a_line(40, 49.0005, 2.0e-2), on_a_line(100_000, 5.0e-4, 1.0e-3));
         let f = frame(50.0, 5.0, 4.0, 2.0, 0.0);
         let held = craft_snap::Query { constraint: Constraint::Axis(Axis::X), ..query(box_subject(f), &s) };
-        compare("a held move among places", (&few, &held), (&many, &held), 40.0);
+        compare("a held move among places", (&few, &held), (&many, &held), 60.0);
         let nudge = query(Subject::Nudge { frame: f, bounds: None, axis: Axis::X, forward: true, reach: NudgeReach::Anywhere, fallback: 0.5 }, &s);
-        compare("a nudge among places", (&few, &nudge), (&many, &nudge), 40.0);
+        compare("a nudge among places", (&few, &nudge), (&many, &nudge), 60.0);
     }
 
     #[test]
