@@ -695,6 +695,7 @@ fn place_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result
     let finals: Vec<Point> = match (q.subject, snapped.point, snapped.frame) {
         (Subject::Point { .. }, Some(p), _) => vec![p],
         (Subject::Box { own, .. }, _, Some(f)) => crate::places::box_places(&f).into_iter().chain(own.iter().map(|p| *p + snapped.delta)).collect(),
+        (Subject::Nudge { .. }, _, Some(f)) => crate::places::box_places(&f),
         _ => Vec::new(),
     };
     if !finals.iter().any(|p| co.same_point(*p, *at)) {

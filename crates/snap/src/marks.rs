@@ -257,6 +257,7 @@ pub(crate) fn final_places(cx: &Ctx<'_>, sol: &Solution) -> Vec<kurbo::Point> {
     match (cx.q.subject, sol.point, sol.frame) {
         (Subject::Point { .. }, Some(p), _) => vec![p],
         (Subject::Box { own, .. }, _, Some(f)) => crate::places::box_places(&f).into_iter().chain(own.iter().map(|p| *p + sol.k)).collect(),
+        (Subject::Nudge { .. }, _, Some(f)) => crate::places::box_places(&f),
         _ => Vec::new(),
     }
 }
@@ -337,7 +338,7 @@ pub(crate) fn derive(cx: &mut Ctx<'_>, sol: &Solution) -> Vec<Mark> {
         let n = out.len();
         out.extend(crate::spacing::within_cap(cx, sizes, n));
     }
-    if matches!(cx.q.subject, Subject::Point { .. } | Subject::Box { .. }) {
+    if matches!(cx.q.subject, Subject::Point { .. } | Subject::Box { .. } | Subject::Nudge { .. }) {
         let places = place_marks(cx, sol);
         let n = out.len();
         out.extend(crate::spacing::within_cap(cx, places, n));

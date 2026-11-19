@@ -14,7 +14,9 @@ use crate::ctx::{Cand, Ctx};
 use crate::frame::{Anchors, Axis, Side, TurnedBox};
 use crate::kind::Kind;
 use crate::moves::box_probes;
-use crate::query::NudgeReach;
+use crate::places::{PlaceCand, Travel, Way, box_places, solve_places};
+use crate::query::{Detail, NudgeReach};
+use crate::settings::TravelPlaces;
 use crate::solve::{HitRec, Solution};
 
 /// Whether travel `a` is a better stop than `b`: the shorter, with priority, then id, on a tie within the tolerance.
@@ -23,8 +25,23 @@ fn nearer(cx: &Ctx<'_>, a: &Cand, b: &Cand) -> bool {
     by_len.then(a.prio.cmp(&b.prio)).then(a.id.cmp(&b.id)).then(a.side.cmp(&b.side)).then(a.kind.cmp(&b.kind)).is_lt()
 }
 
+/// Whether a place is a better stop than the line stop `b`: nearer, and on a tie within the same-place rule of a lower priority number (a line
+/// keeps a tie it cannot be told from by priority).
+fn place_before(cx: &Ctx<'_>, p: &PlaceCand, b: &Cand) -> bool {
+    let by_len = if cx.co.same(p.dist, b.t) { std::cmp::Ordering::Equal } else { p.dist.total_cmp(&b.t) };
+    by_len.then(p.prio.cmp(&b.prio)).is_lt()
+}
+
 /// Nudges a box along a page axis to the first target ahead, or by the fallback.
-pub(crate) fn solve_nudge(cx: &mut Ctx<'_>, frame: TurnedBox, axis: Axis, forward: bool, reach: NudgeReach, fallback: f64) -> Solution {
+pub(crate) fn solve_nudge(
+    cx: &mut Ctx<'_>,
+    detail: &mut dyn Detail,
+    frame: TurnedBox,
+    axis: Axis,
+    forward: bool,
+    reach: NudgeReach,
+    fallback: f64,
+) -> Solution {
     let e: Vec2 = axis.unit() * if forward { 1.0 } else { -1.0 };
     cx.region = cx.t.rel_bounds(&frame);
     let limit = match reach {
@@ -100,14 +117,29 @@ pub(crate) fn solve_nudge(cx: &mut Ctx<'_>, frame: TurnedBox, axis: Axis, forwar
             break;
         }
     }
-    let travel = best.map_or(fallback, |b| b.t);
+    // A place on a line one of the subject's places travels along stops it too, when it comes before the line it would stop on (or with it: a tie is
+    // settled by priority), and within the nudge's own reach. The nearest stop wins, whatever its kind.
+    let place = if cx.s.nudge_places == TravelPlaces::OnLine {
+        let sign = if forward { 1.0 } else { -1.0 };
+        let upto = best.map_or(limit, |b| limit.min(b.t + cx.co.tol(b.t, 0.0)));
+        solve_places(cx, detail, &box_places(&frame), None, Some(Travel { axis, way: Way::Ahead { sign, limit: upto } }))
+    } else {
+        None
+    };
+    let place = place.filter(|p| best.is_none_or(|b| place_before(cx, p, &b)));
+    let travel = place.map_or_else(|| best.map_or(fallback, |b| b.t), |p| p.dist);
     let mut sol = Solution::new();
     if !travel.is_finite() {
         cx.work.refused = Some(Refusal::NotFinite);
         return sol;
     }
-    sol.k = e * travel;
+    // The other delta is 0 to the bit, going either way.
+    let along = if forward { travel } else { -travel };
+    sol.k = if axis == Axis::X { Vec2::new(along, 0.0) } else { Vec2::new(0.0, along) };
     sol.frame = Some(TurnedBox { centre: frame.centre + sol.k, ..frame });
-    sol.hits.extend(best.map(HitRec::Line));
+    match place {
+        Some(p) => sol.hits.push(HitRec::Place(p)),
+        None => sol.hits.extend(best.map(HitRec::Line)),
+    }
     sol
 }

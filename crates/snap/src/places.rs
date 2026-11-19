@@ -438,54 +438,50 @@ pub(crate) fn solve_places(
     .any(|k| cx.rule(*k).on);
     let use_points = !t.points.is_empty();
     let use_objects = wants_objects && !t.objects.is_empty();
-    // The windows: the one round the subject, or a strip along each line of travel.
-    let (strips, probe) = match travel {
-        None => (vec![Strip { rect: window, near: None }], window),
+    // The windows: the one round the subject, or a strip along each line of travel (for each grid, as far as its own buckets allow).
+    let mut cut = false;
+    let mut strips_for = |cx: &Ctx<'_>, cell: f64| match travel {
+        None => vec![Strip { rect: window, near: None }],
         Some(tr) => {
-            let mut cell = f64::INFINITY;
-            if use_points {
-                cell = cell.min(t.point_grid(&mut cx.work.made).cell());
-            }
-            if use_objects {
-                cell = cell.min(t.object_grid(&mut cx.work.made).cell());
-            }
-            let (strips, cut) = travel_strips(cx, subject, tr, span, TRAVEL_BUCKETS * cell);
-            if cut {
-                cx.work.cut(Cuts::WINDOW_VISITS);
-            }
-            let probe = strips.iter().fold(None, |u: Option<Rect>, s| Some(u.map_or(s.rect, |u| u.union(s.rect)))).unwrap_or(window);
-            (strips, probe)
+            let (strips, clamped) = travel_strips(cx, subject, tr, span, TRAVEL_BUCKETS * cell);
+            cut |= clamped;
+            strips
         }
     };
+    let point_cell = if use_points { t.point_grid(&mut cx.work.made).cell() } else { 1.0 };
+    let object_cell = if use_objects { t.object_grid(&mut cx.work.made).cell() } else { 1.0 };
+    let point_strips = if use_points { strips_for(cx, point_cell) } else { Vec::new() };
+    let object_strips = if use_objects { strips_for(cx, object_cell) } else { Vec::new() };
+    if cut {
+        cx.work.cut(Cuts::WINDOW_VISITS);
+    }
+    // What pieces of outline are kept to cross: those in the window, or in any strip.
+    let probe = object_strips.iter().fold(None, |u: Option<Rect>, s| Some(u.map_or(s.rect, |u| u.union(s.rect)))).unwrap_or(window);
     // The app's own places.
-    if use_points {
-        for strip in &strips {
-            if !cx.work.gather() {
-                break;
-            }
-            let g = t.point_grid(&mut cx.work.made).gather_from(&strip.rect, strip.near, limit, visits);
-            note(cx, &g);
-            for c in &g.items {
-                if let Some(p) = t.points.get(c.index as usize) {
-                    w.offer(cx, Gathered { kind: p.kind, id: p.id, number: Some(p.number), at: p.at });
-                }
+    for strip in &point_strips {
+        if !cx.work.gather() {
+            break;
+        }
+        let g = t.point_grid(&mut cx.work.made).gather_from(&strip.rect, strip.near, limit, visits);
+        note(cx, &g);
+        for c in &g.items {
+            if let Some(p) = t.points.get(c.index as usize) {
+                w.offer(cx, Gathered { kind: p.kind, id: p.id, number: Some(p.number), at: p.at });
             }
         }
     }
     // The objects near: their boxes' places, and what the detail source gives. An object that meets two strips is looked at once.
     let mut scan = Scan { asked: 0, sets: Vec::new(), probe, base };
-    if use_objects {
-        let mut seen: HashSet<u32> = HashSet::new();
-        for strip in &strips {
-            if !cx.work.gather() {
-                break;
-            }
-            let g = t.object_grid(&mut cx.work.made).gather_from(&strip.rect, strip.near, limit, visits);
-            note(cx, &g);
-            for c in &g.items {
-                if let Some(o) = t.objects.get(c.index as usize).filter(|_| seen.insert(c.index)) {
-                    from_object(cx, &mut w, detail, o, &mut scan);
-                }
+    let mut seen: HashSet<u32> = HashSet::new();
+    for strip in &object_strips {
+        if !cx.work.gather() {
+            break;
+        }
+        let g = t.object_grid(&mut cx.work.made).gather_from(&strip.rect, strip.near, limit, visits);
+        note(cx, &g);
+        for c in &g.items {
+            if let Some(o) = t.objects.get(c.index as usize).filter(|_| seen.insert(c.index)) {
+                from_object(cx, &mut w, detail, o, &mut scan);
             }
         }
     }
