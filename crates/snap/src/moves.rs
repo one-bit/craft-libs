@@ -20,9 +20,9 @@ use crate::budget::{Cuts, Work};
 use crate::ctx::{Cand, Ctx, Probe, ProbeSide, probes, top};
 use crate::frame::{Anchors, OwnOrBounds, Side, TurnedBox, to_page_axes};
 use crate::kind::Kind;
-use crate::places::{PlaceCand, box_places, solve_places};
+use crate::places::{PlaceCand, Travel, Way, box_places, solve_places};
 use crate::query::{Constraint, Detail, Rounding, Subject};
-use crate::settings::{Choose, Places};
+use crate::settings::{Choose, Places, TravelPlaces};
 use crate::solve::{HitRec, RoundOn, Solution, round_k};
 use crate::targets::side_lines;
 
@@ -285,7 +285,14 @@ fn settle(
 ) -> (Vec2, Vec<HitRec>) {
     let (refp, minp) = (at.refp, at.minp);
     let lines = solve_probes(cx, ps, fr, spaced, refp, minp);
-    let place = if matches!(fr.free, Free::Normal) { solve_places(cx, detail, &places.0, places.1) } else { None };
+    let place = match (fr.free, cx.q.constraint) {
+        (Free::Normal, _) => solve_places(cx, detail, &places.0, places.1, None),
+        // A move held to a page axis meets the places on the lines its own places travel along.
+        (Free::Along(_), Constraint::Axis(axis)) if cx.s.locked_places == TravelPlaces::OnLine => {
+            solve_places(cx, detail, &places.0, places.1, Some(Travel { axis, way: Way::Both }))
+        }
+        _ => None,
+    };
     match decide(cx, lines, place, fr, refp, minp) {
         Some(Chosen::Lines(k, c)) => (k, std::iter::once(c.a).chain(c.b).map(HitRec::Line).collect()),
         Some(Chosen::Place(k, p)) => (k, vec![HitRec::Place(p)]),

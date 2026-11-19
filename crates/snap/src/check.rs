@@ -701,7 +701,11 @@ fn place_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result
         return broken("a place mark is not on a place of the final geometry", m);
     }
     let exists = match kind {
-        Kind::Point(_) => t.points.iter().any(|p| p.kind == *kind && p.id == *id && Some(p.number) == *number && co.same_point(p.at, *at)),
+        // A place of the app's kinds is one the builder holds, or one the detail source gives for an object that can (which the check cannot read).
+        Kind::Point(_) => {
+            t.points.iter().any(|p| p.kind == *kind && p.id == *id && Some(p.number) == *number && co.same_point(p.at, *at))
+                || id.is_some_and(|i| t.objects.iter().any(|o| o.id == i && o.parts.detail))
+        }
         Kind::Corner | Kind::SideMiddle => t.objects.iter().any(|o| {
             let c = o.frame.corners();
             let places: Vec<Point> = if *kind == Kind::Corner {

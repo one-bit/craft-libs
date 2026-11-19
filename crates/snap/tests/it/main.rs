@@ -9,4 +9,5 @@ mod moves;
 mod oracle;
 mod round2;
 mod spacing;
+mod travel;
 mod turns;

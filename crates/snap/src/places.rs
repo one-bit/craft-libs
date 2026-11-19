@@ -6,12 +6,13 @@
 //! intersection wins a near tie by 15% of its reach, as a CAD aperture does.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 use kurbo::{BezPath, Point, Rect, Vec2};
 
 use crate::budget::{Cuts, Spend, Work};
 use crate::ctx::Ctx;
-use crate::frame::{Id, TurnedBox};
+use crate::frame::{Axis, Id, TurnedBox};
 use crate::kind::Kind;
 use crate::osnap;
 use crate::query::Detail;
@@ -38,14 +39,37 @@ pub(crate) struct PlaceCand {
     pub dist: f64,
     /// The distance less the bonus of a vertex or an intersection: what `Nearest` compares.
     pub score: f64,
+    /// For a subject that travels along one axis: the move along it that puts `q` on the place, with nothing across (to the bit).
+    pub by: Option<Vec2>,
 }
 
 impl PlaceCand {
     /// What to add to the subject.
     pub fn k(&self) -> Vec2 {
-        self.g.at - self.q
+        self.by.unwrap_or(self.g.at - self.q)
     }
 }
+
+/// How a subject that travels along one page axis meets a place.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Way {
+    /// A move held to the axis: a place within its kind's reach along the line, either way.
+    Both,
+    /// A nudge: the first place strictly ahead, `sign` being 1 along the axis or -1 against it, at most `limit` away.
+    Ahead { sign: f64, limit: f64 },
+}
+
+/// A subject that travels along one page axis: only the places on the lines its own places travel along are met.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Travel {
+    pub axis: Axis,
+    pub way: Way,
+}
+
+/// How many buckets of the finest grid a window along a line of travel may cover from the subject: a nudge that looks as far as it can, with no
+/// target nearer, reads this many and says so. (The grid cuts a wider window to the buckets round its middle, which for a window that starts at the
+/// subject is the wrong part.)
+pub(crate) const TRAVEL_BUCKETS: f64 = 46.0;
 
 /// The nine places of a turned box: its corners, the middles of its sides and its centre.
 pub(crate) fn box_places(f: &TurnedBox) -> Vec<Point> {
@@ -57,6 +81,42 @@ pub(crate) fn box_places(f: &TurnedBox) -> Vec<Point> {
 struct Weigh<'a> {
     subject: &'a [Point],
     best: Option<PlaceCand>,
+    travel: Option<Travel>,
+}
+
+/// The pull of the target place `g` on the subject place `q` when the subject travels along one axis: only a place on the line `q` travels along is
+/// met (the same place across the axis, by the same-place rule), and the subject lands on it.
+fn on_travel(cx: &Ctx<'_>, tr: Travel, g: Gathered, q: Point, prio: u8, reach: f64) -> Option<PlaceCand> {
+    let (at_g, at_q, same_line) = match tr.axis {
+        Axis::X => (g.at.x, q.x, cx.co.same(g.at.y, q.y)),
+        Axis::Y => (g.at.y, q.y, cx.co.same(g.at.x, q.x)),
+    };
+    let along = at_g - at_q;
+    if !(same_line && along.is_finite()) {
+        return None;
+    }
+    let (dist, reach, bonus) = match tr.way {
+        Way::Both => {
+            let d = along.abs();
+            if !cx.pulls(g.kind, d) {
+                return None;
+            }
+            (d, reach, if matches!(g.kind, Kind::Vertex | Kind::Intersection) && reach.is_finite() { 0.15 * reach } else { 0.0 })
+        }
+        Way::Ahead { sign, limit } => {
+            // Strictly ahead is past the same-place rule, so a place the subject's own place is on is not the next one.
+            let t = along * sign;
+            if !(t > 0.0 && !cx.co.same(at_g, at_q) && t <= limit + cx.co.tol(t, limit.min(1.0e300))) {
+                return None;
+            }
+            (t, f64::INFINITY, 0.0)
+        }
+    };
+    let by = match tr.axis {
+        Axis::X => Vec2::new(along, 0.0),
+        Axis::Y => Vec2::new(0.0, along),
+    };
+    Some(PlaceCand { g, prio, reach, q, dist, score: dist - bonus, by: Some(by) })
 }
 
 fn order(a: &PlaceCand, b: &PlaceCand, choose: Choose, co: &crate::frame::Coincide) -> std::cmp::Ordering {
@@ -82,13 +142,25 @@ impl Weigh<'_> {
         let rule = cx.rule(g.kind);
         let reach = cx.reach(g.kind);
         for q in self.subject {
-            let dist = (g.at - *q).hypot();
-            if !dist.is_finite() || !cx.pulls(g.kind, dist) {
-                continue;
-            }
-            let bonus = if matches!(g.kind, Kind::Vertex | Kind::Intersection) && reach.is_finite() { 0.15 * reach } else { 0.0 };
-            let cand = PlaceCand { g, prio: rule.priority, reach, q: *q, dist, score: dist - bonus };
-            if self.best.is_none_or(|b| order(&cand, &b, cx.s.choose, &cx.co).is_lt()) {
+            let cand = match self.travel {
+                Some(tr) => on_travel(cx, tr, g, *q, rule.priority, reach),
+                None => {
+                    let dist = (g.at - *q).hypot();
+                    let bonus = if matches!(g.kind, Kind::Vertex | Kind::Intersection) && reach.is_finite() { 0.15 * reach } else { 0.0 };
+                    (dist.is_finite() && cx.pulls(g.kind, dist)).then_some(PlaceCand {
+                        g,
+                        prio: rule.priority,
+                        reach,
+                        q: *q,
+                        dist,
+                        score: dist - bonus,
+                        by: None,
+                    })
+                }
+            };
+            if let Some(cand) = cand
+                && self.best.is_none_or(|b| order(&cand, &b, cx.s.choose, &cx.co).is_lt())
+            {
                 self.best = Some(cand);
             }
         }
@@ -242,8 +314,82 @@ fn from_object(cx: &mut Ctx<'_>, w: &mut Weigh<'_>, detail: &mut dyn Detail, o: 
     }
 }
 
+/// A window of a bucket grid, and the point its buckets are read from (`None`: its middle).
+struct Strip {
+    rect: Rect,
+    near: Option<Point>,
+}
+
+/// The subject's places that travel along one line.
+struct Line {
+    across: (f64, f64),
+    along: (f64, f64),
+    tol: f64,
+}
+
+/// The windows to gather for a subject that travels along one axis: one thin strip for each line its places travel along (places the same across the
+/// axis, by the same-place rule, share one), in the order of the lines across. A move looks a reach either side of its places along the line; a nudge
+/// looks ahead of them, up to `cap` from the subject (and `cut` says when that was less than it was asked).
+fn travel_strips(cx: &Ctx<'_>, subject: &[Point], tr: Travel, span: f64, cap: f64) -> (Vec<Strip>, bool) {
+    // Each place: where it is across the axis (in absolute numbers, for the same-place rule, and about the grid's origin) and along it.
+    let mut places: Vec<(f64, f64, f64)> = subject
+        .iter()
+        .map(|p| {
+            let r = *p - cx.o;
+            match tr.axis {
+                Axis::X => (p.y, r.y, r.x),
+                Axis::Y => (p.x, r.x, r.y),
+            }
+        })
+        .collect();
+    places.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.total_cmp(&b.2)));
+    let mut lines: Vec<(f64, Line)> = Vec::new();
+    for (across_abs, across, along) in places {
+        let tol = cx.co.tol(across_abs, across_abs);
+        match lines.last_mut() {
+            Some((first, line)) if cx.co.same(*first, across_abs) => {
+                line.across = (line.across.0.min(across), line.across.1.max(across));
+                line.along = (line.along.0.min(along), line.along.1.max(along));
+                line.tol = line.tol.max(tol);
+            }
+            _ => lines.push((across_abs, Line { across: (across, across), along: (along, along), tol })),
+        }
+    }
+    let mut cut = false;
+    let strips = lines
+        .into_iter()
+        .map(|(_, l)| {
+            let (a0, a1) = (l.across.0 - 2.0 * l.tol, l.across.1 + 2.0 * l.tol);
+            let (lo, hi) = l.along;
+            let (along, near) = match tr.way {
+                Way::Both => ((lo - span, hi + span), 0.5 * (lo + hi)),
+                Way::Ahead { sign, limit } => {
+                    let reach = limit.min(cap);
+                    cut |= reach < limit;
+                    if sign > 0.0 { ((lo, hi + reach), lo) } else { ((lo - reach, hi), hi) }
+                }
+            };
+            let mid = 0.5 * (a0 + a1);
+            match tr.axis {
+                Axis::X => Strip { rect: Rect::new(along.0, a0, along.1, a1), near: Some(Point::new(near, mid)) },
+                Axis::Y => Strip { rect: Rect::new(a0, along.0, a1, along.1), near: Some(Point::new(mid, near)) },
+            }
+        })
+        .collect();
+    (strips, cut)
+}
+
 /// The best place the subject's places can be pulled to, or none. The places weighed are kept in the context for the marks.
-pub(crate) fn solve_places(cx: &mut Ctx<'_>, detail: &mut dyn Detail, subject: &[Point], base: Option<Point>) -> Option<PlaceCand> {
+///
+/// With `travel`, the subject moves along one page axis only: its places are met on the lines they travel along, in one thin window for each line
+/// (each one a gather), and the best is the nearest along its line.
+pub(crate) fn solve_places(
+    cx: &mut Ctx<'_>,
+    detail: &mut dyn Detail,
+    subject: &[Point],
+    base: Option<Point>,
+    travel: Option<Travel>,
+) -> Option<PlaceCand> {
     let rules: Vec<f64> = [
         Kind::Point(0),
         Kind::Corner,
@@ -260,7 +406,12 @@ pub(crate) fn solve_places(cx: &mut Ctx<'_>, detail: &mut dyn Detail, subject: &
     .filter(|r| r.is_finite())
     .collect();
     let reach = rules.into_iter().fold(0.0, f64::max);
-    if reach <= 0.0 || subject.is_empty() {
+    // How far along its line a place may be: a kind's reach for a move, the nudge's own for a nudge.
+    let span = match travel {
+        Some(Travel { way: Way::Ahead { limit, .. }, .. }) => limit,
+        _ => reach,
+    };
+    if span <= 0.0 || span.is_nan() || subject.is_empty() {
         return None;
     }
     let rel: Vec<Vec2> = subject.iter().map(|p| *p - cx.o).collect();
@@ -269,20 +420,9 @@ pub(crate) fn solve_places(cx: &mut Ctx<'_>, detail: &mut dyn Detail, subject: &
         (x0, y0, x1, y1) = (x0.min(v.x), y0.min(v.y), x1.max(v.x), y1.max(v.y));
     }
     let window = Rect::new(x0 - reach, y0 - reach, x1 + reach, y1 + reach);
-    let mut w = Weigh { subject, best: None };
+    let mut w = Weigh { subject, best: None, travel };
     let t = cx.t;
     let (limit, visits) = (u64::from(cx.budget().candidates) as usize, u64::from(cx.budget().window_visits));
-    // The app's own places.
-    if !t.points.is_empty() && cx.work.gather() {
-        let g = t.point_grid(&mut cx.work.made).gather(&window, limit, visits);
-        note(cx, &g);
-        for c in &g.items {
-            if let Some(p) = t.points.get(c.index as usize) {
-                w.offer(cx, Gathered { kind: p.kind, id: p.id, number: Some(p.number), at: p.at });
-            }
-        }
-    }
-    // The objects near: their boxes' places, and what the detail source gives.
     let wants_objects = [
         Kind::Point(0),
         Kind::Corner,
@@ -296,18 +436,61 @@ pub(crate) fn solve_places(cx: &mut Ctx<'_>, detail: &mut dyn Detail, subject: &
     ]
     .iter()
     .any(|k| cx.rule(*k).on);
-    let mut scan = Scan { asked: 0, sets: Vec::new(), probe: window, base };
-    if wants_objects && !t.objects.is_empty() && cx.work.gather() {
-        let g = t.object_grid(&mut cx.work.made).gather(&window, limit, visits);
-        note(cx, &g);
-        for c in &g.items {
-            if let Some(o) = t.objects.get(c.index as usize) {
-                from_object(cx, &mut w, detail, o, &mut scan);
+    let use_points = !t.points.is_empty();
+    let use_objects = wants_objects && !t.objects.is_empty();
+    // The windows: the one round the subject, or a strip along each line of travel.
+    let (strips, probe) = match travel {
+        None => (vec![Strip { rect: window, near: None }], window),
+        Some(tr) => {
+            let mut cell = f64::INFINITY;
+            if use_points {
+                cell = cell.min(t.point_grid(&mut cx.work.made).cell());
+            }
+            if use_objects {
+                cell = cell.min(t.object_grid(&mut cx.work.made).cell());
+            }
+            let (strips, cut) = travel_strips(cx, subject, tr, span, TRAVEL_BUCKETS * cell);
+            if cut {
+                cx.work.cut(Cuts::WINDOW_VISITS);
+            }
+            let probe = strips.iter().fold(None, |u: Option<Rect>, s| Some(u.map_or(s.rect, |u| u.union(s.rect)))).unwrap_or(window);
+            (strips, probe)
+        }
+    };
+    // The app's own places.
+    if use_points {
+        for strip in &strips {
+            if !cx.work.gather() {
+                break;
+            }
+            let g = t.point_grid(&mut cx.work.made).gather_from(&strip.rect, strip.near, limit, visits);
+            note(cx, &g);
+            for c in &g.items {
+                if let Some(p) = t.points.get(c.index as usize) {
+                    w.offer(cx, Gathered { kind: p.kind, id: p.id, number: Some(p.number), at: p.at });
+                }
+            }
+        }
+    }
+    // The objects near: their boxes' places, and what the detail source gives. An object that meets two strips is looked at once.
+    let mut scan = Scan { asked: 0, sets: Vec::new(), probe, base };
+    if use_objects {
+        let mut seen: HashSet<u32> = HashSet::new();
+        for strip in &strips {
+            if !cx.work.gather() {
+                break;
+            }
+            let g = t.object_grid(&mut cx.work.made).gather_from(&strip.rect, strip.near, limit, visits);
+            note(cx, &g);
+            for c in &g.items {
+                if let Some(o) = t.objects.get(c.index as usize).filter(|_| seen.insert(c.index)) {
+                    from_object(cx, &mut w, detail, o, &mut scan);
+                }
             }
         }
     }
     // Outlines the app gave the builder for objects that are not in the grid's window are read only through their object.
-    crossings(cx, &mut w, &scan.sets, &window);
+    crossings(cx, &mut w, &scan.sets, &probe);
     w.best
 }
 
