@@ -8,12 +8,24 @@ use crate::common::*;
 
 /// Boxes A, 0 to 2 (id 1), and B, 5 to 7 (id 2), a box between them and the edges and centres of boxes on from 6 screen units, at 72 to the unit.
 fn nudge(reach: Option<f64>, between: Rect, forward: bool, extra: &[(u64, Rect)]) -> Snapped {
+    nudge_within(reach, None, between, forward, extra)
+}
+
+/// The same, a key press of one step (`Some`) or to the next place however far (`None`).
+fn nudge_within(reach: Option<f64>, step: Option<f64>, between: Rect, forward: bool, extra: &[(u64, Rect)]) -> Snapped {
     let mut boxes = vec![(1, Rect::new(0.0, 0.0, 2.0, 1.0)), (2, Rect::new(5.0, 0.0, 7.0, 1.0))];
     boxes.extend_from_slice(extra);
     let t = world(&boxes, &[], &[]);
     let mut s: Settings = only(&[(Kind::Edge, Reach::Screen(6.0), 3), (Kind::Centre, Reach::Screen(6.0), 3)]);
     s.align_reach = reach.map(Reach::Document);
-    let subject = Subject::Nudge { frame: rect_box(between), bounds: None, axis: Axis::X, forward, reach: NudgeReach::Anywhere, fallback: 0.125 };
+    let subject = Subject::Nudge {
+        frame: rect_box(between),
+        bounds: None,
+        axis: Axis::X,
+        forward,
+        reach: step.map_or(NudgeReach::Anywhere, NudgeReach::Within),
+        fallback: 0.125,
+    };
     let q = Query { zoom: 72.0, ..query(subject, &s) };
     let r = run(&t, &q);
     r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
@@ -48,4 +60,16 @@ fn a_line_the_same_place_as_a_side_is_no_stop_for_a_nudge_with_a_reach_across() 
         let (dx, hits) = stop(&nudge(reach, Rect::new(3.0, 0.0, 3.0, 1.0), true, &[wall]));
         assert_eq!((dx, hits), (2.0, vec![(Kind::Edge, Some(2))]), "reach {reach:?}");
     }
+}
+
+#[test]
+fn a_nudge_of_one_step_reads_the_objects_as_far_as_the_step_and_not_only_as_far_as_the_reach_across_alignment() {
+    // B's edge is 2 from the box's high side, past an alignment reach of 0.5 and within a step of 3. A key press of that step reads as far as the step; one
+    // to the next place reads as far as the alignment does.
+    let (dx, hits) = stop(&nudge_within(Some(0.5), Some(3.0), Rect::new(2.0, 0.0, 3.0, 1.0), true, &[]));
+    assert_eq!((dx, hits), (2.0, vec![(Kind::Edge, Some(2))]));
+    let (dx, hits) = stop(&nudge_within(Some(0.5), Some(1.0), Rect::new(2.0, 0.0, 3.0, 1.0), true, &[]));
+    assert_eq!((dx, hits), (0.125, vec![]), "beyond the step");
+    let (dx, hits) = stop(&nudge_within(Some(0.5), None, Rect::new(2.0, 0.0, 3.0, 1.0), true, &[]));
+    assert_eq!((dx, hits), (0.125, vec![]), "beyond the alignment reach");
 }
