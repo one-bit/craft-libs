@@ -304,6 +304,21 @@ mod held_move {
         assert_eq!(r.delta.x, 4.0);
         assert_eq!(r.hits[0].kind, Kind::Intersection);
     }
+
+    #[test]
+    fn a_subject_wider_than_a_window_may_read_still_meets_the_places_past_its_corners() {
+        // A box `w` wide and 10 high from x = 0: its right side is at `w`. A place 1 past it, on its top line, is within the reach (6) and pulls.
+        for w in [40.0, 100.0, 400.0, 1000.0] {
+            let f = frame(w / 2.0, 5.0, w, 10.0, 0.0);
+            let t = targets(&[(9, w + 1.0, 10.0), (8, -30.0, 0.0)], &[]);
+            let r = held(&t, &on_line(), f, Axis::X);
+            assert_eq!((r.delta.x, r.hits.first().and_then(|h| h.number)), (1.0, Some(9)), "width {w}: {r:?}");
+            // And one 2 before the left side, on the bottom line.
+            let t = targets(&[(9, -2.0, 0.0), (8, w + 30.0, 10.0)], &[]);
+            let r = held(&t, &on_line(), f, Axis::X);
+            assert_eq!((r.delta.x, r.hits.first().and_then(|h| h.number)), (-2.0, Some(9)), "width {w}: {r:?}");
+        }
+    }
 }
 
 mod nudge {
@@ -606,6 +621,56 @@ mod nudge {
         let r = right(&b.build(), &s);
         assert_eq!((r.delta.x, r.hits[0].kind, r.work.truncated), (10.0, Kind::Guide, false));
     }
+
+    /// A box `w` wide and 10 high whose left side is at 0: its places are on the lines y = 0, 5 and 10, and along x at 0, `w / 2` and `w`.
+    fn wide(w: f64) -> TurnedBox {
+        frame(w / 2.0, 5.0, w, 10.0, 0.0)
+    }
+
+    #[test]
+    fn a_subject_wider_than_a_window_may_read_still_stops_at_the_nearest_place_past_either_corner() {
+        let s = on_line();
+        let two = |a: f64, b: f64| {
+            let mut t = TargetsBuilder::new(Limits::default());
+            t.point(Some(Id(1)), Point::new(a, 10.0), Kind::Point(0), 1).unwrap();
+            t.point(Some(Id(2)), Point::new(b, 10.0), Kind::Point(0), 2).unwrap();
+            t.build()
+        };
+        for w in [40.0, 100.0, 400.0, 1000.0] {
+            // One place 1 past the leading corner and one 20 past the trailing one: the first is nearer, from the leading place.
+            let t = two(w + 1.0, 20.0);
+            let fwd = press(&t, &s, wide(w), Axis::X, true, NudgeReach::Anywhere, &[]);
+            assert_eq!((fwd.delta.x, fwd.hits[0].number), (1.0, Some(1)), "width {w}: {fwd:?}");
+            // The same, going the other way: 1 past the left corner and 20 before the right one.
+            let t = two(-1.0, w - 20.0);
+            let back = press(&t, &s, wide(w), Axis::X, false, NudgeReach::Anywhere, &[]);
+            assert_eq!((back.delta.x, back.hits[0].number), (-1.0, Some(1)), "width {w}: {back:?}");
+            // Only a place ahead of the middle of the subject, past neither corner (the other is far past the leading one): the middle place reaches it.
+            let t = two(w * 0.75, w * 2.0);
+            let mid = press(&t, &s, wide(w), Axis::X, true, NudgeReach::Anywhere, &[]);
+            assert_eq!((mid.delta.x, mid.hits[0].number), (w * 0.25, Some(1)), "width {w}: {mid:?}");
+            // Within a step, the same.
+            let t = two(w + 1.0, 20.0);
+            let step = press(&t, &s, wide(w), Axis::X, true, NudgeReach::Within(3.0), &[]);
+            assert_eq!((step.delta.x, step.hits[0].number), (1.0, Some(1)), "width {w}: {step:?}");
+        }
+        // Far wider than a strip may be (a line on a bucket boundary is two buckets across, and a strip covers 2,304 buckets in all): the part of the
+        // line round the trailing place is read, the rest is not, and the answer says so.
+        let t = two(5001.0, 20.0);
+        let far = press(&t, &s, wide(5000.0), Axis::X, true, NudgeReach::Anywhere, &[]);
+        assert_eq!((far.delta.x, far.hits[0].number), (20.0, Some(2)), "{far:?}");
+        assert!(far.work.truncated && far.work.cut.has(Cuts::WINDOW_VISITS), "{:?}", far.work);
+        // The same along y, for a tall box.
+        let mut t = TargetsBuilder::new(Limits::default());
+        t.point(Some(Id(1)), Point::new(10.0, 101.0), Kind::Point(0), 1).unwrap();
+        t.point(Some(Id(2)), Point::new(10.0, 20.0), Kind::Point(0), 2).unwrap();
+        let up = press(&t.build(), &s, frame(5.0, 50.0, 10.0, 100.0, 0.0), Axis::Y, true, NudgeReach::Anywhere, &[]);
+        assert_eq!((up.delta.y, up.hits[0].number), (1.0, Some(1)), "{up:?}");
+        // With objects: the corners of a box 1 past the subject's leading side are met, a box inside its span too.
+        let t = targets(&[], &[(7, frame(111.0, 5.0, 20.0, 10.0, 0.0))]);
+        let r = press(&t, &s, wide(100.0), Axis::X, true, NudgeReach::Anywhere, &[]);
+        assert_eq!(r.delta.x, 1.0, "{r:?}");
+    }
 }
 
 /// The subject's places and the targets' places against a scan: for a held move and for a nudge, on a lattice where places meet lines by themselves,
@@ -747,11 +812,21 @@ mod against_a_scan {
         })
     }
 
+    /// A subject far wider than a window of the places' grid may be read in one piece (20 to 120 units, where a bucket of the places is 1), square to the
+    /// page or a quarter turn from it: the places past its corners and between them are met as for a small one.
+    fn wide_box() -> impl Strategy<Value = TurnedBox> {
+        (lattice(), lattice(), 40i32..240, 1i32..8, prop_oneof![Just(0.0), Just(FRAC_PI_2)]).prop_map(|(x, y, w, h, a)| TurnedBox {
+            centre: Point::new(x, y),
+            size: kurbo::Size::new(f64::from(w) * 0.5, f64::from(h) * 0.5),
+            angle: a,
+        })
+    }
+
     fn scene() -> impl Strategy<Value = Scene> {
         (
             prop::collection::vec((lattice(), lattice()), 0..8),
             prop::collection::vec(a_box(), 0..4),
-            a_box(),
+            prop_oneof![3 => a_box(), 2 => wide_box()],
             prop::collection::vec((0usize..9, -12i32..12), 0..4),
             prop::collection::vec((lattice(), lattice()), 0..3),
         )

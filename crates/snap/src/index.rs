@@ -342,6 +342,29 @@ pub(crate) const MAX_BUCKETS_PER_BOX: i64 = 16;
 /// The most buckets in each direction a window may cover: a wider window is cut to the part round its middle.
 pub(crate) const MAX_WINDOW_BUCKETS: i64 = 48;
 
+/// The most buckets in all that a long thin window (a strip) may cover: its shorter side is cut to [`MAX_WINDOW_BUCKETS`] as any window's is, and
+/// its longer side to as many as the same number of buckets in all allows, so that a window one bucket across is read as far as 2,304 along.
+pub(crate) const MAX_STRIP_BUCKETS: i64 = MAX_WINDOW_BUCKETS * MAX_WINDOW_BUCKETS;
+
+/// How a window past the bounds is cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    /// To [`MAX_WINDOW_BUCKETS`] in each direction.
+    Block,
+    /// To [`MAX_WINDOW_BUCKETS`] in the shorter direction and, in the longer, to what [`MAX_STRIP_BUCKETS`] leaves.
+    Strip,
+}
+
+impl Shape {
+    /// The most buckets one side of a window may cover when the other side covers `other`.
+    fn side(self, other: i64) -> i64 {
+        match self {
+            Shape::Block => MAX_WINDOW_BUCKETS,
+            Shape::Strip => (MAX_STRIP_BUCKETS / other.clamp(1, MAX_WINDOW_BUCKETS)).max(MAX_WINDOW_BUCKETS),
+        }
+    }
+}
+
 /// The farthest bucket number, in each direction.
 const MAX_BUCKET: f64 = 2_147_483_648.0;
 
@@ -397,10 +420,40 @@ fn bucket_of(v: f64, cell: f64) -> i64 {
 
 /// The buckets at the distance `r` (the larger of the two differences) from `(cx, cy)`: that one alone for 0, else the sides of the square
 /// round it, each bucket once. At most `8 r` of them.
+#[cfg(test)]
 fn ring(cx: i64, cy: i64, r: i64) -> impl Iterator<Item = (i64, i64)> {
     let across = (cx - r..=cx + r).flat_map(move |bx| if r == 0 { vec![(bx, cy)] } else { vec![(bx, cy - r), (bx, cy + r)] });
     let down = (cy - r + 1..=cy + r - 1).flat_map(move |by| [(cx - r, by), (cx + r, by)]);
     across.chain(down)
+}
+
+/// The buckets of [`ring`] that lie in the window `(x0, y0, x1, y1)` (bucket numbers, both ends in), in the same order, put in `out`: the cost of
+/// a ring is what the window holds of it and not the size of the ring, so that a window one bucket across costs its length and not its square.
+fn ring_in(cx: i64, cy: i64, r: i64, (x0, y0, x1, y1): (i64, i64, i64, i64), out: &mut Vec<(i64, i64)>) {
+    let within = |v: i64, lo: i64, hi: i64| lo <= v && v <= hi;
+    // The two rows of the ring (one for 0) and its two columns, each only when it is in the window, so that a ring wholly outside costs nothing.
+    let (top, bottom) = (within(cy - r, y0, y1), r > 0 && within(cy + r, y0, y1));
+    if top || bottom {
+        for bx in (cx - r).max(x0)..=(cx + r).min(x1) {
+            if top {
+                out.push((bx, cy - r));
+            }
+            if bottom {
+                out.push((bx, cy + r));
+            }
+        }
+    }
+    let (left, right) = (within(cx - r, x0, x1), within(cx + r, x0, x1));
+    if left || right {
+        for by in (cy - r + 1).max(y0)..=(cy + r - 1).min(y1) {
+            if left {
+                out.push((cx - r, by));
+            }
+            if right {
+                out.push((cx + r, by));
+            }
+        }
+    }
 }
 
 fn distance_to(r: &Rect, p: Point) -> f64 {
@@ -500,12 +553,23 @@ impl Grid {
     /// As [`Grid::gather`], with the buckets visited in rings round `near` (kept inside the window) and the boxes ranked by their distance to it,
     /// where `gather` takes the middle of the window. A window that is long and thin, or that looks one way from the subject, is read from its end.
     pub fn gather_from(&self, window: &Rect, near: Option<Point>, limit: usize, visits: u64) -> Gather<'_> {
+        self.gather_shaped(window, near, limit, visits, Shape::Block)
+    }
+
+    /// As [`Grid::gather_from`], for a window that is long and thin: its longer side may cover as many buckets as [`MAX_STRIP_BUCKETS`] allows
+    /// for its shorter (up to 2,304 for a window one bucket across), so that a line of places is read from end to end. A window that is not thin is
+    /// cut as `gather_from` cuts it, and a longer one is cut to the buckets round `near`, and says so.
+    pub fn gather_strip(&self, window: &Rect, near: Option<Point>, limit: usize, visits: u64) -> Gather<'_> {
+        self.gather_shaped(window, near, limit, visits, Shape::Strip)
+    }
+
+    fn gather_shaped(&self, window: &Rect, near: Option<Point>, limit: usize, visits: u64, shape: Shape) -> Gather<'_> {
         let mut found = Found { visited: 0, examined: 0, cut: false, seen: HashSet::new(), hits: Vec::new(), cap: visits, window: *window };
         // The finest grid first, then each coarser one, then the boxes too wide for any: the small boxes under the pointer are looked at before the wide
         // ones that cover it, and a window meets the few coarse buckets it is over and not every wide box there is.
         let mut more = true;
         if [window.x0, window.y0, window.x1, window.y1].iter().all(|v| v.is_finite()) {
-            more = self.levels.iter().all(|level| self.rings(level, window, near, &mut found));
+            more = self.levels.iter().all(|level| self.rings(level, window, near, shape, &mut found));
         }
         if more {
             more = self.big.iter().all(|n| self.visit(*n, &mut found));
@@ -521,18 +585,19 @@ impl Grid {
     }
 
     /// Visits the buckets of the window in one grid, in rings round its middle. Returns false when the visits ran out.
-    fn rings(&self, level: &Level, window: &Rect, near: Option<Point>, found: &mut Found) -> bool {
+    fn rings(&self, level: &Level, window: &Rect, near: Option<Point>, shape: Shape, found: &mut Found) -> bool {
         let (mut x0, mut x1) = (bucket_of(window.x0, level.cell), bucket_of(window.x1, level.cell));
         let (mut y0, mut y1) = (bucket_of(window.y0, level.cell), bucket_of(window.y1, level.cell));
         let at = near.map(|p| (bucket_of(p.x, level.cell), bucket_of(p.y, level.cell)));
-        for (lo, hi, round) in [(&mut x0, &mut x1, at.map(|a| a.0)), (&mut y0, &mut y1, at.map(|a| a.1))] {
-            if *hi - *lo + 1 > MAX_WINDOW_BUCKETS {
+        let (across, down) = (x1 - x0 + 1, y1 - y0 + 1);
+        for (lo, hi, round, cap) in [(&mut x0, &mut x1, at.map(|a| a.0), shape.side(down)), (&mut y0, &mut y1, at.map(|a| a.1), shape.side(across))] {
+            if *hi - *lo + 1 > cap {
                 // Some of the window is not looked at: the answer says so. The part kept is round the middle, or round `near` when there is one.
                 found.cut = true;
                 let mid = round.unwrap_or(*lo + (*hi - *lo) / 2);
-                let start = (mid - MAX_WINDOW_BUCKETS / 2).max(*lo).min(*hi - (MAX_WINDOW_BUCKETS - 1));
+                let start = (mid - cap / 2).max(*lo).min(*hi - (cap - 1));
                 *lo = start;
-                *hi = start + MAX_WINDOW_BUCKETS - 1;
+                *hi = start + cap - 1;
             }
         }
         let (cx, cy) = match at {
@@ -540,12 +605,12 @@ impl Grid {
             None => (x0 + (x1 - x0) / 2, y0 + (y1 - y0) / 2),
         };
         let rings = (cx - x0).max(x1 - cx).max(cy - y0).max(y1 - cy);
+        let mut ring = Vec::new();
         for r in 0..=rings {
-            for (bx, by) in ring(cx, cy, r) {
-                if bx < x0 || bx > x1 || by < y0 || by > y1 {
-                    continue;
-                }
-                let Some(list) = level.buckets.get(&(bx, by)) else { continue };
+            ring.clear();
+            ring_in(cx, cy, r, (x0, y0, x1, y1), &mut ring);
+            for at in &ring {
+                let Some(list) = level.buckets.get(at) else { continue };
                 if !list.iter().all(|n| self.visit(*n, found)) {
                     return false;
                 }
@@ -1142,6 +1207,138 @@ mod tests {
         let middle = g.gather_from(&window, Some(Point::new(100.0, 0.5)), 1000, 100_000);
         assert_eq!(ids(&middle).len(), 48);
         assert_eq!(ids(&g.gather(&window, 1000, 100_000)), (25..=72).collect::<Vec<u64>>());
+    }
+
+    #[test]
+    fn a_ring_cut_to_a_window_is_the_ring_with_the_buckets_outside_it_left_out_in_the_same_order() {
+        // Every window of up to 4 by 4 buckets about the origin, every centre in it, every ring to past the window's size: a window that holds none of
+        // a ring gives nothing, and one that holds part of it gives that part in the order the whole ring has.
+        let mut seen = 0;
+        for (x0, x1) in [(-1, 1), (0, 3), (-3, 0), (0, 0), (-2, 1)] {
+            for (y0, y1) in [(-1, 1), (0, 0), (-2, 2), (1, 3)] {
+                for cx in x0..=x1 {
+                    for cy in y0..=y1 {
+                        for r in 0..=7 {
+                            let mut got = Vec::new();
+                            ring_in(cx, cy, r, (x0, y0, x1, y1), &mut got);
+                            let want: Vec<(i64, i64)> = ring(cx, cy, r).filter(|(bx, by)| (x0..=x1).contains(bx) && (y0..=y1).contains(by)).collect();
+                            assert_eq!(got, want, "ring {r} about ({cx}, {cy}) in x {x0}..{x1}, y {y0}..{y1}");
+                            seen += want.len();
+                        }
+                    }
+                }
+            }
+        }
+        assert!(seen > 1000, "{seen}");
+        // The cost: a ring wholly outside a window gives nothing, and one beside a one-bucket window gives its two buckets only.
+        let mut out = Vec::new();
+        ring_in(0, 0, 500, (-3, 0, 3, 0), &mut out);
+        assert!(out.is_empty(), "{out:?}");
+        ring_in(0, 0, 3, (-3, 0, 3, 0), &mut out);
+        assert_eq!(out, vec![(-3, 0), (3, 0)]);
+    }
+
+    #[test]
+    fn the_longer_side_of_a_strip_is_what_the_bucket_count_allows_and_a_block_is_cut_to_forty_eight_each_way() {
+        for other in [1, 2, 3, 24, 47, 48, 49, 1_000_000, 0, -5] {
+            assert_eq!(Shape::Block.side(other), 48, "{other}");
+        }
+        let side = |other| Shape::Strip.side(other);
+        assert_eq!((side(1), side(2), side(3), side(4), side(24)), (2_304, 1_152, 768, 576, 96));
+        assert_eq!((side(47), side(48), side(49), side(1_000_000)), (49, 48, 48, 48), "never less than 48");
+        assert_eq!((side(0), side(-5)), (2_304, 2_304), "a side of no buckets is one");
+    }
+
+    /// A row of boxes one to a bucket of 2 along y in 0 to 2, and a second row in the next bucket up.
+    fn rows(n: u64) -> Grid {
+        let mut items: Vec<Cell> = (0..n).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
+        items.extend((0..n).map(|i| cell(100_000 + i, i as f64 * 2.0 + 0.5, 2.5, 1.0, 1.0)));
+        Grid::build(items)
+    }
+
+    fn ids(f: &Gather<'_>) -> Vec<u64> {
+        let mut v: Vec<u64> = f.items.iter().map(|c| c.id.0).collect();
+        v.sort_unstable();
+        v
+    }
+
+    #[test]
+    fn a_strip_is_read_end_to_end_where_a_block_of_the_same_size_is_cut() {
+        let g = rows(1_000);
+        assert_eq!(g.cell, 2.0);
+        // 500 buckets along and one across (y 0 to 1.9 is bucket 0): every box of the first row, and the row above is not in the window.
+        let window = Rect::new(0.0, 0.0, 999.9, 1.9);
+        let strip = g.gather_strip(&window, Some(Point::new(0.0, 0.5)), 10_000, 100_000);
+        assert_eq!(ids(&strip), (0..500).collect::<Vec<u64>>());
+        assert!(!strip.cut, "the strip is within its bound");
+        assert_eq!(strip.visited, 500, "one bucket entry for each box, and none for the buckets outside the window");
+        // A block is cut to 48 from `near`, as it was.
+        let block = g.gather_from(&window, Some(Point::new(0.0, 0.5)), 10_000, 100_000);
+        assert_eq!(ids(&block), (0..48).collect::<Vec<u64>>());
+        assert!(block.cut);
+        // The same window read from its right end, and from its middle.
+        let right = g.gather_strip(&window, Some(Point::new(999.9, 0.5)), 10_000, 100_000);
+        assert_eq!(ids(&right), (0..500).collect::<Vec<u64>>());
+        let middle = g.gather_strip(&window, None, 10_000, 100_000);
+        assert_eq!(ids(&middle), (0..500).collect::<Vec<u64>>());
+    }
+
+    #[test]
+    fn a_strip_two_buckets_across_may_be_half_as_long_and_one_wider_still_a_third() {
+        // 2,000 buckets along. One across: cut to 2,304 would not cut; two across (y 0 to 3.9): 1,152; three: 768.
+        let mut items: Vec<Cell> = (0..2_000u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
+        items.extend((0..3u64).map(|i| cell(100_000 + i, 0.5, i as f64 * 2.0 + 0.5, 1.0, 1.0)));
+        let g = Grid::build(items);
+        let near = Some(Point::new(0.0, 0.5));
+        let one = g.gather_strip(&Rect::new(0.0, 0.0, 3_999.9, 1.9), near, 10_000, 100_000);
+        assert!(!one.cut && one.items.iter().filter(|c| c.id.0 < 2_000).count() == 2_000);
+        let two = g.gather_strip(&Rect::new(0.0, 0.0, 3_999.9, 3.9), near, 10_000, 100_000);
+        assert!(two.cut);
+        assert_eq!(two.items.iter().filter(|c| c.id.0 < 2_000).map(|c| c.id.0).max(), Some(1_151), "buckets 0 to 1,151 of the row");
+        let three = g.gather_strip(&Rect::new(0.0, 0.0, 3_999.9, 5.9), near, 10_000, 100_000);
+        assert_eq!(three.items.iter().filter(|c| c.id.0 < 2_000).map(|c| c.id.0).max(), Some(767), "buckets 0 to 767");
+        // 2,000 across and 49 down is a block: 48 each way, round `near`.
+        let mut tall: Vec<Cell> = (0..2_000u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
+        tall.extend((0..60u64).map(|i| cell(100_000 + i, 0.5, i as f64 * 2.0 + 0.5, 1.0, 1.0)));
+        let g = Grid::build(tall);
+        let block = g.gather_strip(&Rect::new(0.0, 0.0, 3_999.9, 99.9), near, 10_000, 100_000);
+        assert!(block.cut);
+        assert_eq!(block.items.iter().filter(|c| c.id.0 < 2_000).map(|c| c.id.0).max(), Some(47));
+        assert_eq!(block.items.iter().filter(|c| c.id.0 >= 100_000).map(|c| c.id.0).max(), Some(100_047));
+    }
+
+    #[test]
+    fn a_strip_longer_than_its_bound_is_cut_to_the_buckets_at_its_near_end_and_says_so() {
+        let g = rows(3_000);
+        let window = Rect::new(0.0, 0.0, 5_999.9, 1.9);
+        let left = g.gather_strip(&window, Some(Point::new(1.0, 0.5)), 10_000, 100_000);
+        assert_eq!(ids(&left), (0..2_304).collect::<Vec<u64>>());
+        assert!(left.cut);
+        // From the far end: the last 2,304 buckets of the window (696 to 2,999), nothing past its end.
+        let right = g.gather_strip(&window, Some(Point::new(5_999.0, 0.5)), 10_000, 100_000);
+        assert_eq!(ids(&right), (696..3_000).collect::<Vec<u64>>());
+        assert!(right.cut);
+    }
+
+    #[test]
+    fn a_strip_a_trillion_long_costs_the_bound_and_says_so() {
+        let (cut, visited, near, ring_cost) = finishes(|| {
+            let g = rows(30);
+            let strip = g.gather_strip(&Rect::new(-1.0e12, 0.0, 1.0e12, 1.9), Some(Point::new(5.0, 0.5)), 100, 100_000);
+            let wide = g.gather_strip(&Rect::new(-1.0e12, -1.0e12, 1.0e12, 1.0e12), Some(Point::new(5.0, 0.5)), 100, 100_000);
+            (strip.cut && wide.cut, strip.visited.max(wide.visited), strip.items.iter().any(|c| c.id.0 == 2), wide.items.len())
+        });
+        assert!(cut, "a window narrowed says so");
+        assert!(visited <= 100 && near && ring_cost <= 100);
+    }
+
+    #[test]
+    fn a_strip_that_is_not_finite_is_not_read() {
+        let g = rows(10);
+        let found = g.gather_strip(&Rect::new(f64::NAN, 0.0, 1.0, 1.0), None, 10, 1_000);
+        assert!(found.items.len() <= 20);
+        let found = g.gather_strip(&Rect::new(0.0, 0.0, f64::INFINITY, 1.0), None, 10, 1_000);
+        assert!(found.items.len() <= 20);
     }
 
     /// Small boxes in a block about the origin, so that the buckets are 2 wide.

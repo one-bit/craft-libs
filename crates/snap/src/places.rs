@@ -66,9 +66,9 @@ pub(crate) struct Travel {
     pub way: Way,
 }
 
-/// How many buckets of the finest grid a window along a line of travel may cover from the subject: a nudge that looks as far as it can, with no
-/// target nearer, reads this many and says so. (The grid cuts a wider window to the buckets round its middle, which for a window that starts at the
-/// subject is the wrong part.)
+/// How many buckets of the finest grid a nudge looks ahead of the places of the subject along a line of travel: a nudge that looks as far as it can,
+/// with no target nearer, reads this many past its leading place and says so. The window runs from the subject's trailing place to that, so that a
+/// subject as wide as it likes has the places past its leading corner read as well (the grid reads a strip that long, up to its own bound).
 pub(crate) const TRAVEL_BUCKETS: f64 = 46.0;
 
 /// The nine places of a turned box: its corners, the middles of its sides and its centre.
@@ -502,7 +502,7 @@ pub(crate) fn solve_places(
         if !cx.work.gather() {
             break;
         }
-        let g = t.point_grid(&mut cx.work.made).gather_from(&strip.rect, strip.near, limit, visits);
+        let g = t.point_grid(&mut cx.work.made).gather_strip(&strip.rect, strip.near, limit, visits);
         note(cx, &g);
         for c in &g.items {
             if let Some(p) = t.points.get(c.index as usize) {
@@ -517,7 +517,7 @@ pub(crate) fn solve_places(
         if !cx.work.gather() {
             break;
         }
-        let g = t.object_grid(&mut cx.work.made).gather_from(&strip.rect, strip.near, limit, visits);
+        let g = t.object_grid(&mut cx.work.made).gather_strip(&strip.rect, strip.near, limit, visits);
         note(cx, &g);
         for c in &g.items {
             if let Some(o) = t.objects.get(c.index as usize).filter(|_| seen.insert(c.index)) {
