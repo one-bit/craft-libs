@@ -1339,23 +1339,24 @@ mod tests {
 
     #[test]
     fn a_strip_two_buckets_across_may_be_half_as_long_and_one_wider_still_a_third() {
-        // 2,000 buckets along. One across: cut to 2,304 would not cut; two across (y 0 to 3.9): 1,152; three: 768.
-        let mut items: Vec<Cell> = (0..2_000u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
-        items.extend((0..3u64).map(|i| cell(100_000 + i, 0.5, i as f64 * 2.0 + 0.5, 1.0, 1.0)));
+        // 2,000 buckets along, in the buckets of y from 10 up (a count from a bucket that is not 0 is a count). One across: cut at 2,304 would not cut;
+        // two across (y 20 to 23.9): 1,152; three: 768.
+        let mut items: Vec<Cell> = (0..2_000u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 20.5, 1.0, 1.0)).collect();
+        items.extend((0..3u64).map(|i| cell(100_000 + i, 0.5, 20.5 + i as f64 * 2.0, 1.0, 1.0)));
         let g = Grid::build(items);
-        let near = Some(Point::new(0.0, 0.5));
-        let one = g.gather_strip(&Rect::new(0.0, 0.0, 3_999.9, 1.9), near, 10_000, 100_000);
+        let near = Some(Point::new(0.0, 20.5));
+        let one = g.gather_strip(&Rect::new(0.0, 20.0, 3_999.9, 21.9), near, 10_000, 100_000);
         assert!(!one.cut && one.items.iter().filter(|c| c.id.0 < 2_000).count() == 2_000);
-        let two = g.gather_strip(&Rect::new(0.0, 0.0, 3_999.9, 3.9), near, 10_000, 100_000);
+        let two = g.gather_strip(&Rect::new(0.0, 20.0, 3_999.9, 23.9), near, 10_000, 100_000);
         assert!(two.cut);
         assert_eq!(two.items.iter().filter(|c| c.id.0 < 2_000).map(|c| c.id.0).max(), Some(1_151), "buckets 0 to 1,151 of the row");
-        let three = g.gather_strip(&Rect::new(0.0, 0.0, 3_999.9, 5.9), near, 10_000, 100_000);
+        let three = g.gather_strip(&Rect::new(0.0, 20.0, 3_999.9, 25.9), near, 10_000, 100_000);
         assert_eq!(three.items.iter().filter(|c| c.id.0 < 2_000).map(|c| c.id.0).max(), Some(767), "buckets 0 to 767");
         // 2,000 across and 49 down is a block: 48 each way, round `near`.
-        let mut tall: Vec<Cell> = (0..2_000u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
-        tall.extend((0..60u64).map(|i| cell(100_000 + i, 0.5, i as f64 * 2.0 + 0.5, 1.0, 1.0)));
+        let mut tall: Vec<Cell> = (0..2_000u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 20.5, 1.0, 1.0)).collect();
+        tall.extend((0..60u64).map(|i| cell(100_000 + i, 0.5, 20.5 + i as f64 * 2.0, 1.0, 1.0)));
         let g = Grid::build(tall);
-        let block = g.gather_strip(&Rect::new(0.0, 0.0, 3_999.9, 99.9), near, 10_000, 100_000);
+        let block = g.gather_strip(&Rect::new(0.0, 20.0, 3_999.9, 119.9), near, 10_000, 100_000);
         assert!(block.cut);
         assert_eq!(block.items.iter().filter(|c| c.id.0 < 2_000).map(|c| c.id.0).max(), Some(47));
         assert_eq!(block.items.iter().filter(|c| c.id.0 >= 100_000).map(|c| c.id.0).max(), Some(100_047));
@@ -1363,24 +1364,24 @@ mod tests {
 
     #[test]
     fn a_strip_taller_than_it_is_wide_is_cut_by_the_same_rule_down_its_length() {
-        // A column of 2,000 boxes, one to a bucket of 2, with two boxes in the columns beside it.
-        let mut items: Vec<Cell> = (0..2_000u64).map(|i| cell(i, 0.5, i as f64 * 2.0 + 0.5, 1.0, 1.0)).collect();
-        items.extend((0..2u64).map(|i| cell(100_000 + i, (i + 1) as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)));
+        // A column of 2,000 boxes, one to a bucket of 2, in the buckets of x from 5 up, with two boxes in the columns beside it.
+        let mut items: Vec<Cell> = (0..2_000u64).map(|i| cell(i, 10.5, i as f64 * 2.0 + 0.5, 1.0, 1.0)).collect();
+        items.extend((0..2u64).map(|i| cell(100_000 + i, 12.5 + i as f64 * 2.0, 0.5, 1.0, 1.0)));
         let g = Grid::build(items);
         assert_eq!(g.cell, 2.0);
-        let near = Some(Point::new(0.5, 0.0));
+        let near = Some(Point::new(10.5, 0.0));
         let tallest = |f: &Gather<'_>| f.items.iter().filter(|c| c.id.0 < 2_000).map(|c| c.id.0).max();
         // One bucket across: all 2,000; two across: 1,152 of them; three across: 768. Not wider than a block is, down its length only.
-        let one = g.gather_strip(&Rect::new(0.0, 0.0, 1.9, 3_999.9), near, 10_000, 100_000);
+        let one = g.gather_strip(&Rect::new(10.0, 0.0, 11.9, 3_999.9), near, 10_000, 100_000);
         assert!(!one.cut);
         assert_eq!(tallest(&one), Some(1_999));
-        let two = g.gather_strip(&Rect::new(0.0, 0.0, 3.9, 3_999.9), near, 10_000, 100_000);
+        let two = g.gather_strip(&Rect::new(10.0, 0.0, 13.9, 3_999.9), near, 10_000, 100_000);
         assert!(two.cut);
         assert_eq!(tallest(&two), Some(1_151));
-        let three = g.gather_strip(&Rect::new(0.0, 0.0, 5.9, 3_999.9), near, 10_000, 100_000);
+        let three = g.gather_strip(&Rect::new(10.0, 0.0, 15.9, 3_999.9), near, 10_000, 100_000);
         assert_eq!(tallest(&three), Some(767));
         // The same windows as blocks keep 48.
-        let block = g.gather_from(&Rect::new(0.0, 0.0, 1.9, 3_999.9), near, 10_000, 100_000);
+        let block = g.gather_from(&Rect::new(10.0, 0.0, 11.9, 3_999.9), near, 10_000, 100_000);
         assert_eq!(tallest(&block), Some(47));
     }
 
