@@ -147,7 +147,8 @@ mod spacing_then_the_next_place {
 /// A resize whose nearest line of a kind would leave the box no width or height, or turn it inside out, is offered the next line of that kind in reach:
 /// the side goes there, or stays where it was dragged when there is none.
 mod resize_past_a_collapse {
-    use craft_snap::{About, Edges, Targets, TargetsBuilder};
+    use craft_snap::{About, Edges, Object, Parts, Targets, TargetsBuilder, TurnedBox};
+    use kurbo::Point;
     use proptest::prelude::*;
 
     use super::*;
@@ -311,6 +312,64 @@ mod resize_past_a_collapse {
         let r = resize(&t, &s, Rect::new(1.0, 1.0, 1.24, 2.0), right(), Constraint::None);
         assert!(close(sides(&r), [1.0, 1.0, 1.2, 2.0]), "{:?}", sides(&r));
         assert_eq!(hit_kinds(&r), vec![(Kind::Size, Some(1), None)]);
+    }
+
+    /// The V25 numbers in the own frame of a box turned by `turn`: other boxes turned alike have edges at 1 and 1.1 along the box's own x. The side of the
+    /// box that moves is its own (max x) side; the one that stays is at 1. `mirror` turns the box over, which swaps which own side is the max one.
+    fn turned_case(turn: f64, drag: f64, flip: bool) -> craft_snap::Snapped {
+        let at = |x: f64, y: f64| {
+            let (s, c) = turn.sin_cos();
+            Point::new(c * x - s * y, s * x + c * y)
+        };
+        // (The boxes are higher up than the one resized, so that none of their own sides lies along the sides of it.)
+        let obj = |id: u64, x0: f64, x1: f64| (id, TurnedBox { centre: at(0.5 * (x0 + x1), 3.5), size: kurbo::Size::new(x1 - x0, 1.0), angle: turn });
+        // Edges at 1 and 1.1 for the side that moves at the max end; at 1 and 0.9 for the min side that moves, the max side being fixed at 1.
+        let boxes = if flip { [obj(1, 0.4, 0.9), obj(2, 1.0, 1.5)] } else { [obj(1, 0.5, 1.0), obj(2, 1.1, 1.6)] };
+        let mut b = TargetsBuilder::new(craft_snap::Limits::default());
+        for (id, f) in boxes {
+            b.object(craft_snap::Id(id), Object { frame: f, bounds: None, angle: None, parts: Parts::ALL }).unwrap();
+        }
+        let t = b.build();
+        let mut s = only(&[(Kind::Edge, Reach::Screen(6.0), 1)]);
+        s.frames = craft_snap::Frames { page: false, own: true };
+        // The box as dragged, in its own frame (1, 1) to (drag, 2); flipped, the side that moves is the min one, the box running from `drag` to 1.
+        let (x0, x1) = if flip { (drag, 1.0) } else { (1.0, drag) };
+        let frame = TurnedBox { centre: at(0.5 * (x0 + x1), 1.5), size: kurbo::Size::new(x1 - x0, 1.0), angle: turn };
+        let moving = if flip { Edges { u_min: true, ..Edges::default() } } else { right() };
+        let q = Query { zoom: 72.0, ..query(craft_snap::Subject::Edges { frame, moving }, &s) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+        r
+    }
+
+    #[test]
+    fn it_is_the_same_in_the_own_frame_of_a_turned_box_and_for_the_other_side_of_it() {
+        let x = |r: &craft_snap::Snapped, turn: f64| {
+            let f = r.frame.expect("a resize has a box");
+            let (s, c) = turn.sin_cos();
+            // The centre and the width in the box's own frame.
+            (c * f.centre.x + s * f.centre.y, f.size.width)
+        };
+        for turn in [0.5, 1.2, 2.9, -0.7] {
+            let r = turned_case(turn, 1.03, false);
+            let (centre, width) = x(&r, turn);
+            assert!((width - 0.1).abs() < 1e-9 && (centre - 1.05).abs() < 1e-9, "turn {turn}: {centre} {width} {:?}", r.hits);
+            assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+            assert_eq!((r.hits[0].kind, r.hits[0].id), (Kind::Edge, Some(craft_snap::Id(2))));
+            // Out of reach of the next edge (0.0999 away), the side stays where it was dragged, and nothing is hit.
+            let r = turned_case(turn, 1.0001, false);
+            let (centre, width) = x(&r, turn);
+            assert!(
+                (width - 0.0001).abs() < 1e-9 && (centre - 1.00005).abs() < 1e-9 && r.hits.is_empty(),
+                "turn {turn} near: {centre} {width} {:?}",
+                r.hits
+            );
+            // The side that is at the min end: dragged to 0.97 against the fixed one at 1, the edge at 1 would collapse it and the one at 0.9 is next.
+            let r = turned_case(turn, 0.97, true);
+            let (centre, width) = x(&r, turn);
+            assert!((width - 0.1).abs() < 1e-9 && (centre - 0.95).abs() < 1e-9, "turn {turn} min side: {centre} {width} {:?}", r.hits);
+            assert_eq!((r.hits.len(), r.hits[0].kind, r.hits[0].id), (1, Kind::Edge, Some(craft_snap::Id(1))));
+        }
     }
 
     /// A fixed seed, so that a run is the same run each time; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and each find is a case to read.
