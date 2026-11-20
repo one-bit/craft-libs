@@ -231,9 +231,10 @@ fn ahead_in<'e>(cx: &Ctx<'_>, entries: &'e [Entry], s: f64, up: bool) -> Option<
     }
 }
 
-/// How many lines of a lattice are stepped past when finding the first that is ahead: the lines are only as exact as the numbers they are made of, so
-/// far from the origin the one after the first may be nearer than the same-place rule, and no more than that.
-const LATTICE_STEPS: usize = 4;
+/// How many lines of a lattice are looked at to find the first that is ahead: the first, the next, and the one after. A line is only as exact as its
+/// number, so far from the origin the next may be nearer than the same-place rule; the one after it is two pitches from the first, and a pitch is more
+/// than the rule.
+const LATTICE_STEPS: usize = 3;
 
 /// The first line of a lattice on a page axis that is strictly ahead of the offset `s` of a side, past the same-place rule: above it when `up`, else
 /// below. Lines no farther apart than the rule are one place with the side or with each other, so none of them is ahead, and a lattice made of them
@@ -571,6 +572,9 @@ mod tests {
         assert_eq!(past(&mut cx, 8.0, Side::Min, Kind::Centre, true), Some(10.0));
         assert_eq!(past(&mut cx, 8.0, Side::Min, Kind::Guide, true), Some(15.0));
         assert_eq!(past(&mut cx, 12.0, Side::Min, Kind::Edge, false), Some(8.0));
+        // The left edges and the right edges are two sets of the kind: past 20 going down, the nearest of the two sets' lines is 19, not the 12 of the other.
+        assert_eq!(past(&mut cx, 20.0, Side::Min, Kind::Edge, false), Some(19.0));
+        assert_eq!(past(&mut cx, 13.0, Side::Min, Kind::Edge, true), Some(19.0), "up, the nearest of the sets' lines");
         // Under like to like an edge is met by a side that is not a middle, and a centre by a middle only.
         let like = Settings { matching: Matching::LikeToLike, ..Settings::default() };
         let q = query(&like);

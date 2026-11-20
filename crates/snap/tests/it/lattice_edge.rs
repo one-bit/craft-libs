@@ -59,3 +59,30 @@ mod lattice_residue {
         }
     }
 }
+
+mod far_origin {
+    use super::*;
+
+    #[test]
+    fn a_lattice_whose_origin_is_so_far_that_its_line_numbers_pass_two_to_the_fifty_second_gives_no_stop() {
+        // Lines 1e-6 apart from an origin 1e12 away are numbered in the 1e18, past what a number can tell apart: the line a number names is not the
+        // one the subject is next to, so there is no stop, going either way; the nudge moves by its fallback.
+        let t = TargetsBuilder::new(craft_snap::Limits::default()).build();
+        let s = Settings::default();
+        let lats = [Lattice { origin: Point::new(1.0e12, 1.0e12), pitch: Vec2::new(1.0e-6, 1.0e-6), kind: Kind::Grid }];
+        for forward in [true, false] {
+            let subject = Subject::Nudge {
+                frame: TurnedBox { centre: Point::new(0.3, 0.7), size: Size::new(2.0, 2.0), angle: 0.0 },
+                bounds: None,
+                axis: Axis::X,
+                forward,
+                reach: NudgeReach::Anywhere,
+                fallback: 0.125,
+            };
+            let q = Query { lattices: &lats, ..query(subject, &s) };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap();
+            assert!(r.hits.is_empty() && (r.delta.x.abs() - 0.125).abs() < 1e-12, "forward {forward}: {:?} {:?}", r.delta, r.hits);
+        }
+    }
+}

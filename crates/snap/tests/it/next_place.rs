@@ -144,6 +144,23 @@ mod spacing_then_the_next_place {
     }
 }
 
+/// A move along a ray whose reference point is off the ray is first put on it; the places it meets are on its line, and the candidates hold where it lands.
+#[test]
+fn a_move_along_a_ray_from_a_point_off_the_ray_meets_a_guide_where_it_lands() {
+    // The box's centre is at (5, 4), off the ray through the origin along (1, 1): the box is put at (4.5, 4.5) and a guide at 4.8 pulls its middle there.
+    let t = world(&[], &[4.8], &[]);
+    let s = only(&[(Kind::Guide, Reach::Screen(6.0), 1)]);
+    let q = Query {
+        zoom: 8.0,
+        constraint: Constraint::Ray { origin: kurbo::Point::ORIGIN, dir: kurbo::Vec2::new(1.0, 1.0) },
+        ..query(box_subject(frame(5.0, 4.0, 2.0, 2.0, 0.0)), &s)
+    };
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+    assert!((r.delta.x + 0.2).abs() < 1e-9 && (r.delta.y - 0.8).abs() < 1e-9, "{:?} {:?}", r.delta, r.hits);
+    assert_eq!(hit_kinds(&r), vec![(Kind::Guide, None, Some(0.0))]);
+}
+
 /// A resize whose nearest line of a kind would leave the box no width or height, or turn it inside out, is offered the next line of that kind in reach:
 /// the side goes there, or stays where it was dragged when there is none.
 mod resize_past_a_collapse {

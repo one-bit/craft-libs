@@ -535,6 +535,26 @@ mod tests {
     }
 
     #[test]
+    fn where_neither_kind_has_a_reach_a_pair_may_throw_the_box_eight_times_the_farther_pull_and_no_more() {
+        // Directions turned by `theta` from each other, pulls of 2 and -2 that disagree: the pair is solved for a correction of 4 / theta (nearly).
+        let free = |theta: f64| {
+            let ps = vec![
+                Probe { angle: 0.0, normal: Vec2::new(1.0, 0.0), sides: Vec::new() },
+                Probe { angle: theta, normal: Vec2::new(theta.cos(), theta.sin()), sides: Vec::new() },
+            ];
+            let (a, b) = (
+                Cand { reach: f64::INFINITY, ..cand(Kind::Grid, 1, 2.0, 1, 0.0) },
+                Cand { reach: f64::INFINITY, ..cand(Kind::Grid, 2, -2.0, 1, theta) },
+            );
+            pair_combo(&a, &b, (0, 1), &ps, 0).map(|c| c.k.hypot())
+        };
+        // The limit is 8 times 2 = 16.
+        assert!(free(0.5).is_some_and(|k| (k - 8.0).abs() < 0.3), "{:?}: inside it (a limit of 4 would refuse)", free(0.5));
+        assert!(free(0.3).is_some_and(|k| k > 12.0 && k < 16.0), "{:?}: inside it (a limit of 10 would refuse)", free(0.3));
+        assert!(free(0.2).is_none(), "{:?}: a correction of 20 is past 16", free(0.2));
+    }
+
+    #[test]
     fn of_two_combinations_as_good_the_one_of_what_a_direction_kept_goes_first_and_more_degrees_beat_both() {
         let co = Coincide::default();
         let (a, b) = (cand(Kind::Edge, 1, 1.0, 1, 0.0), cand(Kind::Edge, 1, 1.0, 1, 0.0));

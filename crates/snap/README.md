@@ -111,7 +111,7 @@ with another gets no rotation match, and its work says `truncated` with the `ANG
   `CANDIDATES` is set when a strip held more than 64 places or objects (the 64 nearest the trailing place are kept) or was longer than a strip may
   be. `Within(step)` reads the same-place rule past the step too, since a place that far past it is a stop. A lattice no coarser than the
   same-place rule has no stops for a nudge (its lines are one place with the side, or with each other); one a hair coarser steps past a line that
-  the rounding of its number has brought within the rule (up to four lines are looked at).
+  the rounding of its number has brought within the rule (up to three lines are looked at).
 - **A wide subject turned off the page axes shares its strips.** A box turned by other than a quarter turn has nine lines of travel, joined into at
   most four strips by how near they lie; a strip that has to cover more than 2,304 buckets in all (a turned box a hundred buckets across) is cut
   round its trailing place and says so. A box square to the page, or a quarter turn from it, has three lines and none of this.
