@@ -265,6 +265,32 @@ mod resize_past_a_collapse {
         assert_eq!(hit_kinds(&r), vec![(Kind::Size, Some(2), None)]);
     }
 
+    #[test]
+    fn a_hundred_thousand_guides_beside_a_collapsing_one_cost_one_more_bisection_of_each_kind_and_say_nothing_is_cut() {
+        // Guides every 0.001 from 1 to 101. The side dragged to 1.0004 is nearest the guide at 1 (which would leave no width) and the next, 0.0006 away,
+        // is in reach. The yardstick is the same query dragged to 1.0006, whose nearest guide (1.001) is fine.
+        let at: Vec<f64> = (0..100_000).map(|i| 1.0 + f64::from(i) * 0.001).collect();
+        let t = guides(&at, &[]);
+        let s = guides_only();
+        let collapsing = resize(&t, &s, Rect::new(1.0, 1.0, 1.0004, 2.0), right(), Constraint::None);
+        let yardstick = resize(&t, &s, Rect::new(1.0, 1.0, 1.0006, 2.0), right(), Constraint::None);
+        assert!(
+            close(sides(&collapsing), [1.0, 1.0, 1.001, 2.0]) && close(sides(&yardstick), [1.0, 1.0, 1.001, 2.0]),
+            "{:?} {:?}",
+            collapsing.hits,
+            yardstick.hits
+        );
+        assert_eq!((collapsing.work.cut, collapsing.work.truncated), (craft_snap::Cuts(0), false));
+        // Three points of the dragged side meet the vertical guides: each asks once more, for the guide past the one that collapses it, which is a
+        // bisection of the one direction and of the 100,000 guides (1 and 17 steps). Measured: 168 against 114.
+        assert_eq!((collapsing.work.bisect_steps, yardstick.work.bisect_steps), (168, 114));
+        // Nothing else grows: no objects were gathered and no more lines were walked.
+        assert_eq!(
+            (collapsing.work.visited, collapsing.work.line_steps, collapsing.work.solves),
+            (yardstick.work.visited, yardstick.work.line_steps, yardstick.work.solves)
+        );
+    }
+
     /// A fixed seed, so that a run is the same run each time; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and each find is a case to read.
     fn config() -> ProptestConfig {
         let number = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(default);
