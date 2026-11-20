@@ -661,6 +661,45 @@ mod resize_past_a_collapse {
         assert_eq!(hit_kinds(&r), vec![(Kind::Ruler, None, Some(0.0))]);
     }
 
+    #[test]
+    fn a_kind_of_any_reach_offers_a_line_past_the_one_that_leaves_no_size_when_it_is_nearer_than_that_one() {
+        // The scene of the line past halfway to the side, with edges that pull from any distance: the right side of a box from 1 dragged to 1.03 under a
+        // lattice of 0.01. The left edge at 1 would leave it no width (0.03 away); the nearest line of the kind past it is the right edge at 1.01, nearer
+        // (0.02), which holds on the lattice, while the right edge nearest to the side, 1.043, is taken off its line. Offering only lines as far as the first
+        // was is not the same as offering none that are nearer.
+        let boxes = [(1, Rect::new(1.0, 5.0, 1.2, 6.0)), (2, Rect::new(0.5, 5.0, 1.043, 6.0)), (3, Rect::new(0.3, 5.0, 1.01, 6.0))];
+        let t = world(&boxes, &[], &[]);
+        for reach in [Reach::Screen(6.0), Reach::Any] {
+            let s = only(&[(Kind::Edge, reach, 1)]);
+            let q = Query {
+                zoom: 72.0,
+                rounding: craft_snap::Rounding::Position(kurbo::Vec2::new(0.01, 0.01)),
+                ..query(craft_snap::Subject::Edges { frame: rect_box(Rect::new(1.0, 0.0, 1.03, 1.0)), moving: right() }, &s)
+            };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{reach:?}: {b:?}\n{r:?}"));
+            assert!(close(sides(&r), [1.0, 0.0, 1.01, 1.0]), "{reach:?}: {:?} {:?}", sides(&r), r.hits);
+            assert_eq!(hit_kinds(&r), vec![(Kind::Edge, Some(3), Some(0.0))], "{reach:?}");
+        }
+    }
+
+    #[test]
+    fn a_line_as_far_as_the_one_that_leaves_no_size_to_the_same_place_rule_is_within_its_reach_and_one_farther_is_not() {
+        // The left side of a box ending at 10, dragged to 9.875, against layout lines (which pull from any distance) at 10, which would leave it no width
+        // (0.125 away), and below it. A line 0.125 away on the other side, to the rule of one place (1e-9), is as far; one a hair farther than that is not.
+        let ask = |below: f64| {
+            let t = world(&[], &[], &[(Axis::X, 10.0), (Axis::X, below)]);
+            let s = only(&[(Kind::Layout, Reach::Any, 1)]);
+            let left = Edges { u_min: true, ..Edges::default() };
+            resize(&t, &s, Rect::new(9.875, 1.0, 10.0, 2.0), left, Constraint::None)
+        };
+        for (below, taken) in [(9.75, true), (9.75 - 1e-11, true), (9.75 - 1e-8, false)] {
+            let r = ask(below);
+            let want = if taken { [below, 1.0, 10.0, 2.0] } else { [9.875, 1.0, 10.0, 2.0] };
+            assert!(close(sides(&r), want) && r.hits.is_empty() != taken, "{below}: {:?} {:?}", sides(&r), r.hits);
+        }
+    }
+
     /// Lines of three kinds across x for a box from 1 whose right side is dragged to `x`, and the rule written out: a guide pulls from 6 screen units, a
     /// layout line and a frame line from any distance. Of each kind the nearest line is the candidate; if it leaves no width the next line past it (above)
     /// is, provided that it is in the reach the first pulled from (a guide: its own; the others: no farther than the first was). `ranked` takes the kind
