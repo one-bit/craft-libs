@@ -161,6 +161,24 @@ fn a_move_along_a_ray_from_a_point_off_the_ray_meets_a_guide_where_it_lands() {
     assert_eq!(hit_kinds(&r), vec![(Kind::Guide, None, Some(0.0))]);
 }
 
+#[test]
+fn a_move_along_a_ray_from_a_point_off_the_ray_repeats_a_gap_where_it_lands() {
+    // Boxes 0 to 4 and 20 to 24, each 1 high on the ray (y from -0.5 to 0.5); the subject is 2 wide and 1 high, centred at (10, 1) and put on the ray at
+    // (10, 0), where its row is the one between them and the middle is 2 to the right of it.
+    let boxes = [(1, Rect::new(0.0, -0.5, 4.0, 0.5)), (2, Rect::new(20.0, -0.5, 24.0, 0.5))];
+    let t = world(&boxes, &[], &[]);
+    let mut s = only(&[(Kind::Spacing, Reach::Document(5.0), 1)]);
+    s.spacing_reach = SpacingReach { times: 4.0, at_least: 20.0 };
+    let q = Query {
+        constraint: Constraint::Ray { origin: kurbo::Point::ORIGIN, dir: kurbo::Vec2::new(1.0, 0.0) },
+        ..query(box_subject(frame(10.0, 1.0, 2.0, 1.0, 0.0)), &s)
+    };
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+    assert!((r.delta.x - 2.0).abs() < 1e-9 && (r.delta.y + 1.0).abs() < 1e-9, "{:?} {:?}", r.delta, r.hits);
+    assert_eq!(hit_kinds(&r), vec![(Kind::Spacing, Some(1), Some(0.0))]);
+}
+
 /// A resize whose nearest line of a kind would leave the box no width or height, or turn it inside out, is offered the next line of that kind in reach:
 /// the side goes there, or stays where it was dragged when there is none.
 mod resize_past_a_collapse {
@@ -187,7 +205,11 @@ mod resize_past_a_collapse {
     }
 
     fn resize(t: &Targets, s: &Settings, dragged: Rect, moving: Edges, constraint: Constraint) -> craft_snap::Snapped {
-        let q = Query { zoom: 72.0, constraint, ..query(craft_snap::Subject::Edges { frame: rect_box(dragged), moving }, s) };
+        resize_box(t, s, rect_box(dragged), moving, constraint)
+    }
+
+    fn resize_box(t: &Targets, s: &Settings, frame: TurnedBox, moving: Edges, constraint: Constraint) -> craft_snap::Snapped {
+        let q = Query { zoom: 72.0, constraint, ..query(craft_snap::Subject::Edges { frame, moving }, s) };
         let r = run(t, &q);
         r.check(t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
         r
@@ -386,6 +408,79 @@ mod resize_past_a_collapse {
             let (centre, width) = x(&r, turn);
             assert!((width - 0.1).abs() < 1e-9 && (centre - 0.95).abs() < 1e-9, "turn {turn} min side: {centre} {width} {:?}", r.hits);
             assert_eq!((r.hits.len(), r.hits[0].kind, r.hits[0].id), (1, Kind::Edge, Some(craft_snap::Id(1))));
+        }
+    }
+
+    /// The page x of the point of the side that moves of a box turned by `turn`, 1 along and `y` up in its own frame, and the cosine of the turn: the page
+    /// x moves by it for each unit along the side.
+    fn page_point(turn: f64, x: f64, y: f64) -> Point {
+        let (sin, cos) = turn.sin_cos();
+        Point::new(cos * x - sin * y, sin * x + cos * y)
+    }
+
+    /// A box turned by `turn` with its max side, 1 along its own x to start with, dragged to the width `width`, resized against guides across x at page
+    /// positions `guides_at` (a guide pulls from 6 screen units at 72 to the unit): the widths it may come to (two guides as near as each other are both
+    /// right), and whether a guide was met at all. The rule written out: of the three points that move, each guide is a travel along the side of
+    /// (guide - x of the point) / cosine of the turn; the nearest within reach that leaves a width wins.
+    fn turned_expectation(turn: f64, width: f64, guides_at: &[f64]) -> (Vec<f64>, bool) {
+        let cos = turn.cos();
+        let reach = 6.0 / 72.0;
+        let travels: Vec<f64> = [1.0, 1.5, 2.0]
+            .iter()
+            .flat_map(|y| {
+                let p = page_point(turn, 1.0 + width, *y);
+                guides_at.iter().map(move |g| (g - p.x) / cos)
+            })
+            .filter(|t| cos.abs() >= 1e-6 && t.abs() <= reach && width + t > 1e-6)
+            .collect();
+        let least = travels.iter().map(|t| t.abs()).fold(f64::INFINITY, f64::min);
+        if travels.is_empty() {
+            return (vec![width], false);
+        }
+        (travels.iter().filter(|t| (t.abs() - least).abs() < 1e-9).map(|t| width + t).collect(), true)
+    }
+
+    fn turned_resize(turn: f64, width: f64, guides_at: &[f64]) -> craft_snap::Snapped {
+        let frame = TurnedBox { centre: page_point(turn, 1.0 + 0.5 * width, 1.5), size: kurbo::Size::new(width, 1.0), angle: turn };
+        resize_box(&guides(guides_at, &[]), &guides_only(), frame, right(), Constraint::None)
+    }
+
+    #[test]
+    fn a_turned_box_whose_nearest_guide_would_collapse_it_goes_to_the_next_whichever_way_its_side_points_across_the_page() {
+        // The middle of the side that moves is at page x `mid`. A box turned 2.9 radians (a cosine of -0.97) has its side pointing to the left across the
+        // page: the guide that makes a travel of -0.0304 along it (to the right of the middle) leaves no width, and the one that makes 0.0412 (to the left) does.
+        // The same for the other turns, among them -2.2 radians (a cosine of -0.59) and 0.5 (0.88).
+        for turn in [2.9, -2.2, 2.0, 0.5, 1.0, -0.7] {
+            let width = 0.03;
+            let mid = page_point(turn, 1.0 + width, 1.5).x;
+            let cos = turn.cos();
+            // The guides that make a travel of -0.0304 (a width of nothing) and of 0.0412 along the side from the middle of it.
+            let (collapsing, growing) = (mid - 0.0304 * cos, mid + 0.0412 * cos);
+            let r = turned_resize(turn, width, &[collapsing, growing]);
+            let (want, met) = turned_expectation(turn, width, &[collapsing, growing]);
+            assert!(met, "turn {turn}: the scene meets a guide");
+            let got = r.frame.expect("a resize has a box").size.width;
+            assert!(want.iter().any(|w| (got - w).abs() < 1e-7) && (got - width).abs() > 1e-3, "turn {turn}: got {got} want one of {want:?}");
+            assert_eq!(r.hits.len(), 1, "turn {turn}: {:?}", r.hits);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        /// A box turned off the page axes, resized by its own max side against page guides, goes where the rule written out says, whatever the turn.
+        #[test]
+        fn a_turned_box_resized_against_page_guides_goes_to_the_nearest_guide_that_leaves_a_width(
+            turn in prop::sample::select(vec![0.0f64, 0.5, 1.0, 2.0, 2.9, -0.7, -2.2, 3.5]), guide_at in prop::collection::vec(-25i32..25, 0..6), wide in 3i32..20,
+        ) {
+            let width = f64::from(wide) * 0.01;
+            let mid = page_point(turn, 1.0 + width, 1.5).x;
+            let guides_at: Vec<f64> = guide_at.iter().map(|k| mid + f64::from(*k) * 0.005).collect();
+            let r = turned_resize(turn, width, &guides_at);
+            let (near, met) = turned_expectation(turn, width, &guides_at);
+            let got = r.frame.expect("a resize has a box").size.width;
+            prop_assert!(near.iter().any(|w| (got - w).abs() < 1e-7), "turn {} width {}: got {} want one of {:?} (guides {:?})", turn, width, got, near, guides_at);
+            prop_assert_eq!(!r.hits.is_empty(), met);
         }
     }
 

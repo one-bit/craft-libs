@@ -346,7 +346,8 @@ pub(crate) fn line_past(cx: &mut Ctx<'_>, angle: f64, from: f64, side: Side, kin
         from_near_objects(cx, r.document(cx.zoom), angle, from, side, Pick::Past(up), &mut near);
         found.extend(near.into_iter().filter(|f| f.kind == kind));
     }
-    found.into_iter().min_by(|a, b| (a.c - from).abs().total_cmp(&(b.c - from).abs()).then(a.id.cmp(&b.id)))
+    let distance = |f: &Found| (f.c - from).abs();
+    found.into_iter().min_by(|a, b| distance(a).total_cmp(&distance(b)).then(a.id.cmp(&b.id)))
 }
 
 /// The nearest line of each kind to the offset `s` of a side of the subject in the direction `angle`.
@@ -659,5 +660,35 @@ mod tests {
         let mut cx = Ctx::new(&t, &q);
         let o = cx.o.x;
         assert!(lines_ahead(&mut cx, 0.0, c - 1.0 - o, Side::Min, true, 0.0).iter().all(|f| f.kind != Kind::Grid));
+    }
+    #[test]
+    fn the_first_line_past_the_rule_is_found_in_either_direction_from_each_side_for_pitches_that_need_all_three_looks() {
+        // Found by a search: pitches just above the same-place rule, far from the origin, for which the line after the side's own is within the rule too
+        // (the pitch is 4.5527e-9 and a number near 1e6 holds 1.2e-10), so the third line looked at is the stop, whichever way the nudge goes.
+        let t = built(&[], &[]);
+        let s = Settings::default();
+        for (c, pitch) in
+            [(1.0e5, 1.3552858983205859e-9), (1.0e6, 4.552720418416241e-9), (1.0e6, 4.5527463689044615e-9), (3.0e6, 1.1658162076332066e-8)]
+        {
+            let lat = [crate::query::Lattice { origin: Point::new(c, c), pitch: Vec2::new(pitch, pitch), kind: Kind::Grid }];
+            let q = Query { subject: Subject::Point { at: Point::new(c, c), base: None }, lattices: &lat, ..query(&s) };
+            let mut cx = Ctx::new(&t, &q);
+            let (tol, o) = (cx.co.tol(c, c), cx.o.x);
+            for side in [c - 1.0, c, c + 1.0] {
+                for up in [true, false] {
+                    // By a scan of the lines round the side: the nearest that is farther from it than the rule, the way the nudge goes.
+                    let line = |k: f64| c + k * pitch;
+                    let n = ((side - c) / pitch).round();
+                    let want = (-6..=6)
+                        .map(|d| line(n + f64::from(d)))
+                        .filter(|l| if up { l - side > tol } else { side - l > tol })
+                        .min_by(|a, b| (a - side).abs().total_cmp(&(b - side).abs()))
+                        .expect("a line is ahead");
+                    let found = lines_ahead(&mut cx, 0.0, side - o, Side::Min, up, 0.0);
+                    let got = found.iter().find(|f| f.kind == Kind::Grid).map(|f| f.c + o);
+                    assert_eq!(got, Some(want), "c {c:e} pitch {pitch:e} side {side} up {up}");
+                }
+            }
+        }
     }
 }
