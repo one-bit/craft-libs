@@ -690,6 +690,35 @@ mod tests {
     }
 
     #[test]
+    fn a_grid_holds_something_past_a_strip_only_when_it_reaches_beyond_the_strips_end_in_the_way_the_nudge_travels() {
+        let strip = |x0, y0, x1, y1| Strip { rect: Rect::new(x0, y0, x1, y1), near: None };
+        let way = |axis, sign| Travel { axis, way: Way::Ahead { sign, limit: 1.0 } };
+        let grid = |x0, y0, x1, y1| Some(Rect::new(x0, y0, x1, y1));
+        let strips = [strip(0.0, 0.0, 10.0, 4.0)];
+        // Forward along x: the strip ends at x = 10, and only a grid that reaches past it is past it. One that ends on it does not, and what lies
+        // behind it, or across it, does not count.
+        assert!(lies_past(grid(0.0, 0.0, 10.5, 1.0), way(Axis::X, 1.0), &strips));
+        assert!(!lies_past(grid(0.0, 0.0, 10.0, 1.0), way(Axis::X, 1.0), &strips));
+        assert!(!lies_past(grid(-50.0, -50.0, 9.5, 50.0), way(Axis::X, 1.0), &strips));
+        // Backward along x: the strip starts at x = 0.
+        assert!(lies_past(grid(-0.5, 0.0, 5.0, 1.0), way(Axis::X, -1.0), &strips));
+        assert!(!lies_past(grid(0.0, 0.0, 5.0, 1.0), way(Axis::X, -1.0), &strips));
+        assert!(!lies_past(grid(0.5, -50.0, 50.0, 50.0), way(Axis::X, -1.0), &strips));
+        // Along y: the strip runs from y = 0 to y = 4.
+        assert!(lies_past(grid(0.0, 0.0, 1.0, 4.5), way(Axis::Y, 1.0), &strips));
+        assert!(!lies_past(grid(0.0, 0.0, 1.0, 4.0), way(Axis::Y, 1.0), &strips));
+        assert!(!lies_past(grid(-50.0, -50.0, 50.0, 3.5), way(Axis::Y, 1.0), &strips));
+        assert!(lies_past(grid(0.0, -0.5, 1.0, 3.0), way(Axis::Y, -1.0), &strips));
+        assert!(!lies_past(grid(0.0, 0.0, 1.0, 3.0), way(Axis::Y, -1.0), &strips));
+        assert!(!lies_past(grid(-50.0, 0.5, 50.0, 50.0), way(Axis::Y, -1.0), &strips));
+        // Any one of the strips will do, an empty grid is past nothing, and a held move reads no such limit.
+        let two = [strip(0.0, 0.0, 10.0, 4.0), strip(0.0, 6.0, 20.0, 8.0)];
+        assert!(lies_past(grid(0.0, 0.0, 15.0, 8.0), way(Axis::X, 1.0), &two));
+        assert!(!lies_past(None, way(Axis::X, 1.0), &strips));
+        assert!(!lies_past(grid(0.0, 0.0, 99.0, 99.0), Travel { axis: Axis::X, way: Way::Both }, &strips));
+    }
+
+    #[test]
     fn nine_lines_are_joined_into_four_strips_cut_at_the_widest_gaps() {
         let tr = Travel { axis: Axis::X, way: Way::Both };
         let ys = [4.0, 5.0, 6.0, 20.0, 21.0, 40.0, 41.0, 80.0, 81.0];
