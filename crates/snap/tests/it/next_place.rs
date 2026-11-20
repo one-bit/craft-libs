@@ -143,3 +143,154 @@ mod spacing_then_the_next_place {
         assert!(r.hits.is_empty() && r.work.truncated && r.work.cut.0 & craft_snap::Cuts::SOLVES != 0, "{:?}", r.work);
     }
 }
+
+/// A resize whose nearest line of a kind would leave the box no width or height, or turn it inside out, is offered the next line of that kind in reach:
+/// the side goes there, or stays where it was dragged when there is none.
+mod resize_past_a_collapse {
+    use craft_snap::{About, Edges, Targets, TargetsBuilder};
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// Guides across x and across y, a guide pulling from 6 screen units: 0.0833 at 72 to the unit.
+    fn guides(x: &[f64], y: &[f64]) -> Targets {
+        let mut b = TargetsBuilder::new(craft_snap::Limits::default());
+        for g in x {
+            b.line(None, Axis::X, *g, None, Kind::Guide).unwrap();
+        }
+        for g in y {
+            b.line(None, Axis::Y, *g, None, Kind::Guide).unwrap();
+        }
+        b.build()
+    }
+
+    fn guides_only() -> Settings {
+        only(&[(Kind::Guide, Reach::Screen(6.0), 1)])
+    }
+
+    fn resize(t: &Targets, s: &Settings, dragged: Rect, moving: Edges, constraint: Constraint) -> craft_snap::Snapped {
+        let q = Query { zoom: 72.0, constraint, ..query(craft_snap::Subject::Edges { frame: rect_box(dragged), moving }, s) };
+        let r = run(t, &q);
+        r.check(t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+        r
+    }
+
+    fn right() -> Edges {
+        Edges { u_max: true, ..Edges::default() }
+    }
+
+    /// The box a resize comes to, as its sides: x0, y0, x1, y1.
+    fn sides(r: &craft_snap::Snapped) -> [f64; 4] {
+        let f = r.frame.expect("a resize has a box");
+        [f.centre.x - 0.5 * f.size.width, f.centre.y - 0.5 * f.size.height, f.centre.x + 0.5 * f.size.width, f.centre.y + 0.5 * f.size.height]
+    }
+
+    fn close(a: [f64; 4], b: [f64; 4]) -> bool {
+        a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-9)
+    }
+
+    #[test]
+    fn a_guide_that_would_leave_no_width_is_passed_over_for_the_next_one_in_reach() {
+        // A box 2 by 1 at (1, 1) to (3, 2), its right side dragged to x = 1.03 with the left side fixed. The guide at 1 is the nearest (0.03) but would leave
+        // the box no width; the one at 1.1 is 0.07 off, within the 0.0833 a guide pulls from.
+        let drag = Rect::new(1.0, 1.0, 1.03, 2.0);
+        let r = resize(&guides(&[1.0, 1.1], &[]), &guides_only(), drag, right(), Constraint::None);
+        assert!(close(sides(&r), [1.0, 1.0, 1.1, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+        assert_eq!(hit_kinds(&r), vec![(Kind::Guide, None, Some(0.0))]);
+        assert!((r.hits[0].distance - 0.07).abs() < 1e-9, "{:?}", r.hits);
+        // The next line past a line that flips the box is offered as well: guides at 0.9 (the side would pass the left one) and 1.
+        let r = resize(&guides(&[0.9, 1.0, 1.1], &[]), &guides_only(), drag, right(), Constraint::None);
+        assert!(close(sides(&r), [1.0, 1.0, 1.1, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+        // With only the guide that collapses it, or a next one out of reach, the side stays where it was dragged and nothing is hit.
+        for at in [vec![1.0], vec![1.0, 1.2], vec![0.9, 1.0]] {
+            let r = resize(&guides(&at, &[]), &guides_only(), drag, right(), Constraint::None);
+            assert!(close(sides(&r), [1.0, 1.0, 1.03, 2.0]) && r.hits.is_empty(), "{at:?}: {:?} {:?}", sides(&r), r.hits);
+        }
+        // A next one that is nearer than the one that collapses is the nearest in the first place.
+        let r = resize(&guides(&[1.0, 1.05], &[]), &guides_only(), drag, right(), Constraint::None);
+        assert!(close(sides(&r), [1.0, 1.0, 1.05, 2.0]), "{:?}", sides(&r));
+    }
+
+    #[test]
+    fn it_is_the_same_on_the_other_side_and_across_y() {
+        // The left side dragged to 2.97 against the right side at 3: the guide at 3 collapses it, the one at 2.9 is the next.
+        let r = resize(
+            &guides(&[2.9, 3.0], &[]),
+            &guides_only(),
+            Rect::new(2.97, 1.0, 3.0, 2.0),
+            Edges { u_min: true, ..Edges::default() },
+            Constraint::None,
+        );
+        assert!(close(sides(&r), [2.9, 1.0, 3.0, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+        // The top side dragged to y = 1.03, then the bottom side to 1.97 (at 2).
+        let r = resize(
+            &guides(&[], &[1.0, 1.1]),
+            &guides_only(),
+            Rect::new(1.0, 1.0, 3.0, 1.03),
+            Edges { v_max: true, ..Edges::default() },
+            Constraint::None,
+        );
+        assert!(close(sides(&r), [1.0, 1.0, 3.0, 1.1]), "{:?} {:?}", sides(&r), r.hits);
+        let r = resize(
+            &guides(&[], &[1.9, 2.0]),
+            &guides_only(),
+            Rect::new(1.0, 1.97, 3.0, 2.0),
+            Edges { v_min: true, ..Edges::default() },
+            Constraint::None,
+        );
+        assert!(close(sides(&r), [1.0, 1.9, 3.0, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+    }
+
+    #[test]
+    fn a_resize_that_keeps_its_proportions_passes_over_a_guide_that_would_collapse_it_too() {
+        // The corner of a 2 by 1 box dragged to (1.03, 1.015) with the ratio 2 kept about the fixed corner: the guide at 1 is the nearest and would scale
+        // it to nothing.
+        let corner = Edges { u_max: true, v_max: true, ..Edges::default() };
+        let keep = Constraint::Aspect { ratio: 2.0, about: About::Fixed };
+        let r = resize(&guides(&[1.0, 1.1], &[]), &guides_only(), Rect::new(1.0, 1.0, 1.03, 1.015), corner, keep);
+        assert!(close(sides(&r), [1.0, 1.0, 1.1, 1.05]), "{:?} {:?}", sides(&r), r.hits);
+        let r = resize(&guides(&[1.0], &[]), &guides_only(), Rect::new(1.0, 1.0, 1.03, 1.015), corner, keep);
+        assert!(r.hits.is_empty(), "{:?}", r.hits);
+    }
+
+    #[test]
+    fn a_width_that_would_leave_no_size_is_passed_over_for_the_next_width_in_reach() {
+        // Another shape has no width (a vertical line) and another is 0.12 wide; the box dragged to a width of 0.05 is nearer to nothing (0.05) than to
+        // 0.12 (0.07), and matching nothing would collapse it.
+        let boxes = [(1, Rect::new(5.0, 0.0, 5.0, 3.0)), (2, Rect::new(7.0, 0.0, 7.12, 3.0))];
+        let t = world(&boxes, &[], &[]);
+        let s = only(&[(Kind::Size, Reach::Screen(6.0), 1)]);
+        let r = resize(&t, &s, Rect::new(1.0, 1.0, 1.05, 2.0), right(), Constraint::None);
+        assert!(close(sides(&r), [1.0, 1.0, 1.12, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+        assert_eq!(hit_kinds(&r), vec![(Kind::Size, Some(2), None)]);
+    }
+
+    fn config() -> ProptestConfig {
+        ProptestConfig { cases: 600, rng_seed: proptest::test_runner::RngSeed::Fixed(0x2025), ..ProptestConfig::default() }
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        /// Against the rule written out: the right side lands on the nearest guide within reach that leaves the box a width (two as near are both right),
+        /// and stays where it was dragged when there is none.
+        #[test]
+        fn the_right_side_goes_to_the_nearest_guide_in_reach_that_leaves_a_width(
+            at in prop::collection::vec(80i32..140, 0..6), drag in 101i32..140,
+        ) {
+            let guides_at: Vec<f64> = at.iter().map(|v| f64::from(*v) * 0.01).collect();
+            let x = f64::from(drag) * 0.01 - 0.0025;
+            let r = resize(&guides(&guides_at, &[]), &guides_only(), Rect::new(1.0, 1.0, x, 2.0), right(), Constraint::None);
+            let reach = 6.0 / 72.0;
+            let mut ok: Vec<f64> = guides_at.iter().copied().filter(|g| *g - 1.0 > 1e-6 && (g - x).abs() <= reach).collect();
+            ok.sort_by(|a, b| (a - x).abs().total_cmp(&(b - x).abs()));
+            let want: Vec<f64> = match ok.first() {
+                None => vec![x],
+                Some(first) => ok.iter().copied().filter(|g| ((g - x).abs() - (first - x).abs()).abs() < 1e-9).collect(),
+            };
+            let got = sides(&r)[2];
+            prop_assert!(want.iter().any(|w| (got - w).abs() < 1e-9), "got {} want one of {:?} (guides {:?}, dragged to {})", got, want, guides_at, x);
+            prop_assert_eq!(r.hits.is_empty(), ok.is_empty());
+        }
+    }
+}

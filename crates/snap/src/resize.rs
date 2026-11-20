@@ -15,7 +15,7 @@
 
 use kurbo::{Point, Vec2};
 
-use crate::align::lines_near;
+use crate::align::{line_past, lines_near};
 use crate::ctx::{Cand, Ctx, Probe, ProbeSide, top};
 use crate::frame::{OwnOrBounds, Side, TurnedBox};
 use crate::kind::Kind;
@@ -77,6 +77,15 @@ impl DegKind {
     /// Whether the extents it gives are a box with some size on both axes: more than the same-place rule can tell from nothing.
     fn valid(&self, co: &crate::frame::Coincide, e: Ext, g: f64) -> bool {
         g.is_finite() && self.apply(e, g).sized(co)
+    }
+
+    /// The way the box grows as `g` grows: 1, or -1 for the side of the box whose travel inwards is a positive `g`. A value of `g` that leaves the box no
+    /// size is one on the side of the way it shrinks.
+    fn grows(&self) -> f64 {
+        match self {
+            DegKind::Side(SideId::UMin | SideId::VMin) => -1.0,
+            DegKind::Side(SideId::UMax | SideId::VMax) | DegKind::Half(_) | DegKind::Scale(..) => 1.0,
+        }
     }
 }
 
@@ -228,7 +237,12 @@ fn side_label(id: SideId) -> Side {
     if matches!(id, SideId::UMin | SideId::VMin) { Side::Min } else { Side::Max }
 }
 
-/// The candidates of one degree: each carried point against the lines of each direction, and the lengths that a size match offers.
+/// How many lines of a kind are looked at past the nearest when the nearest would leave the box no size: the next one in the way the box grows is on the
+/// far side of the side's place, and each after it is farther. Only a box that was already dragged to nothing can need more than one.
+const LINES_PAST: usize = 3;
+
+/// The candidates of one degree: each carried point against the lines of each direction, and the lengths that a size match offers. A line that would
+/// collapse or flip the box is not a candidate, and the next line of its kind in the way the box grows is looked at instead, while it is in reach.
 fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBounds)]) -> Vec<Cand> {
     let mut out = Vec::new();
     for (p0, w, id, idx) in &deg.carried {
@@ -238,26 +252,36 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
             let n = crate::frame::unit(a);
             let nw = n.dot(*w);
             let s = n.dot(*p0);
-            for f in lines_near(cx, a, s, label) {
-                let g = (f.c - s) / nw;
-                let travel = g.abs() * w.hypot();
-                if !g.is_finite() || !cx.pulls(f.kind, travel) || cx.too_oblique(f.kind, w.hypot(), nw) || !deg.kind.valid(&cx.co, own.ext, g) {
-                    continue;
+            // The way along the normal in which the box grows.
+            let up = nw * deg.kind.grows() > 0.0;
+            for found in lines_near(cx, a, s, label) {
+                let mut f = found;
+                for _ in 0..=LINES_PAST {
+                    let g = (f.c - s) / nw;
+                    let travel = g.abs() * w.hypot();
+                    if !g.is_finite() || !cx.pulls(f.kind, travel) || cx.too_oblique(f.kind, w.hypot(), nw) {
+                        break;
+                    }
+                    if deg.kind.valid(&cx.co, own.ext, g) {
+                        out.push(Cand {
+                            kind: f.kind,
+                            id: f.id,
+                            prio: cx.rule(f.kind).priority,
+                            reach: cx.reach(f.kind),
+                            side: label,
+                            own: *family,
+                            angle: a,
+                            c: f.c,
+                            s,
+                            d: g,
+                            t: travel,
+                            pt: side_code(*id) * 4 + idx,
+                        });
+                        break;
+                    }
+                    let Some(next) = line_past(cx, a, f.c, label, f.kind, up) else { break };
+                    f = next;
                 }
-                out.push(Cand {
-                    kind: f.kind,
-                    id: f.id,
-                    prio: cx.rule(f.kind).priority,
-                    reach: cx.reach(f.kind),
-                    side: label,
-                    own: *family,
-                    angle: a,
-                    c: f.c,
-                    s,
-                    d: g,
-                    t: travel,
-                    pt: side_code(*id) * 4 + idx,
-                });
             }
         }
     }
@@ -265,15 +289,12 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
     out
 }
 
-/// The length in a sorted array nearest to `len`, within one bisection: one of the two beside its insertion point.
-fn nearest_length(arr: &[crate::index::Length], len: f64) -> Option<crate::index::Length> {
+/// The lengths in a sorted array nearest to `len`, within one bisection: the two beside its insertion point, the nearer first.
+fn nearest_lengths(arr: &[crate::index::Length], len: f64) -> Vec<crate::index::Length> {
     let i = arr.partition_point(|l| l.length < len);
-    [i.checked_sub(1), Some(i)]
-        .into_iter()
-        .flatten()
-        .filter_map(|j| arr.get(j))
-        .min_by(|a, b| (a.length - len).abs().total_cmp(&(b.length - len).abs()).then(a.id.cmp(&b.id)))
-        .copied()
+    let mut out: Vec<crate::index::Length> = [i.checked_sub(1), Some(i)].into_iter().flatten().filter_map(|j| arr.get(j)).copied().collect();
+    out.sort_by(|a, b| (a.length - len).abs().total_cmp(&(b.length - len).abs()).then(a.id.cmp(&b.id)));
+    out
 }
 
 /// The size candidates of a degree: other objects' own widths and heights, by bisection within the reach.
@@ -306,26 +327,33 @@ fn size_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree) -> Vec<Cand> {
         };
         for arr in arrays {
             cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(crate::index::log_steps(arr.len()));
-            let Some(m) = nearest_length(arr, len) else { continue };
-            let g = (m.length - len) / rate;
-            let travel = g.abs() * per_g;
-            if !(g.is_finite() && cx.pulls(Kind::Size, travel) && deg.kind.valid(&cx.co, own.ext, g)) {
-                continue;
+            // The nearest length that leaves the box a size and is in reach: a length that would collapse it (a shape with no width) is passed over for the
+            // next, which is farther.
+            for m in nearest_lengths(arr, len) {
+                let g = (m.length - len) / rate;
+                let travel = g.abs() * per_g;
+                if !(g.is_finite() && cx.pulls(Kind::Size, travel)) {
+                    break;
+                }
+                if !deg.kind.valid(&cx.co, own.ext, g) {
+                    continue;
+                }
+                out.push(Cand {
+                    kind: Kind::Size,
+                    id: Some(m.id),
+                    prio: rule.priority,
+                    reach: cx.reach(Kind::Size),
+                    side: Side::Mid,
+                    own: OwnOrBounds::Own,
+                    angle: if is_w { 0.0 } else { 1.0 },
+                    c: m.length,
+                    s: len,
+                    d: g,
+                    t: travel,
+                    pt: 0,
+                });
+                break;
             }
-            out.push(Cand {
-                kind: Kind::Size,
-                id: Some(m.id),
-                prio: rule.priority,
-                reach: cx.reach(Kind::Size),
-                side: Side::Mid,
-                own: OwnOrBounds::Own,
-                angle: if is_w { 0.0 } else { 1.0 },
-                c: m.length,
-                s: len,
-                d: g,
-                t: travel,
-                pt: 0,
-            });
         }
     }
     out

@@ -150,8 +150,19 @@ fn near_objects(cx: &mut Ctx<'_>, reach: f64) -> Vec<u32> {
     list
 }
 
-/// The lines of the objects near the subject, tested directly: the nearest of each kind, or, with `on`, all those at `s`.
-fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Side, on: bool, out: &mut Vec<Found>) {
+/// Which lines of the objects near the subject are wanted.
+#[derive(Clone, Copy, PartialEq)]
+enum Pick {
+    /// The nearest of each kind to the offset.
+    Nearest,
+    /// Every line at the offset.
+    On,
+    /// The nearest of each kind strictly past the offset (the same-place rule apart), above it when `true`, else below.
+    Past(bool),
+}
+
+/// The lines of the objects near the subject, tested directly: the nearest of each kind, all those at `s`, or the nearest strictly past it.
+fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Side, pick: Pick, out: &mut Vec<Found>) {
     let near = near_objects(cx, reach);
     let (t, co, o) = (cx.t, cx.co, cx.o);
     let mut best: Vec<Found> = Vec::new();
@@ -169,11 +180,15 @@ fn from_near_objects(cx: &mut Ctx<'_>, reach: f64, angle: f64, s: f64, side: Sid
             }
             let (c, lo, hi) = if flipped { (-l.offset, -l.hi, -l.lo) } else { (l.offset, l.lo, l.hi) };
             let found = Found { kind, id: Some(obj.id), c, count: 1, lo, hi, also: None };
-            if on {
-                if co.same(c, s) {
-                    best.push(found);
+            match pick {
+                Pick::On => {
+                    if co.same(c, s) {
+                        best.push(found);
+                    }
+                    continue;
                 }
-                continue;
+                Pick::Past(up) if !((if up { c > s } else { c < s }) && !co.same(c, s)) => continue,
+                Pick::Past(_) | Pick::Nearest => {}
             }
             match best.iter_mut().find(|f| f.kind == kind) {
                 Some(f) if (c - s).abs() < (f.c - s).abs() || ((c - s).abs() == (f.c - s).abs() && found.id < f.id) => *f = found,
@@ -195,7 +210,7 @@ pub(crate) fn lines_find(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, on: O
     match cx.s.align_reach {
         Some(r) if !matches!(r, Reach::Any) => {
             let reach = r.document(cx.zoom);
-            from_near_objects(cx, reach, angle, s, side, on.is_some(), &mut out);
+            from_near_objects(cx, reach, angle, s, side, if on.is_some() { Pick::On } else { Pick::Nearest }, &mut out);
         }
         _ => {
             let table = t.object_lines(&mut cx.work.made);
@@ -282,10 +297,55 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
     }
     if let Some(r) = cx.s.align_reach.filter(|r| !matches!(r, Reach::Any)) {
         let mut near = Vec::new();
-        from_near_objects(cx, r.document(cx.zoom).max(reach), angle, s, side, false, &mut near);
+        from_near_objects(cx, r.document(cx.zoom).max(reach), angle, s, side, Pick::Nearest, &mut near);
         out.extend(near.into_iter().filter(|f| if up { f.c > s && !cx.co.same(f.c, s) } else { f.c < s && !cx.co.same(f.c, s) }));
     }
     out
+}
+
+/// The nearest line of kind `kind` strictly past the offset `from` in the direction `angle`, above it when `up`, else below: what a side may meet
+/// when the nearest line of its kind cannot be taken (it would leave a resized box no size).
+pub(crate) fn line_past(cx: &mut Ctx<'_>, angle: f64, from: f64, side: Side, kind: Kind, up: bool) -> Option<Found> {
+    if !cx.rule(kind).on {
+        return None;
+    }
+    let mut found: Vec<Found> = Vec::new();
+    let (axis_x, axis_y) = (angle.abs() <= cx.co.angle, (angle - FRAC_PI_2).abs() <= cx.co.angle);
+    if axis_x || axis_y {
+        for lat in cx.q.lattices.iter().filter(|l| l.kind == kind && matches(cx, kind, side, None)) {
+            if let Some(c) = lattice_ahead(cx, lat, axis_x, from, up) {
+                found.push(Found { kind, id: None, c, count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY, also: None });
+            }
+        }
+    }
+    let t = cx.t;
+    let mut tables: Vec<&DirTable> = vec![&t.app];
+    if cx.s.align_reach.is_none_or(|r| matches!(r, Reach::Any)) {
+        tables.push(t.object_lines(&mut cx.work.made));
+    }
+    for table in tables {
+        cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(table.dirs.len()));
+        let Some(dir) = table.find(angle, &cx.co) else { continue };
+        let sets: Vec<_> = dir.sets.iter().filter(|set| set.kind == kind && matches(cx, kind, side, set.side)).collect();
+        for set in sets {
+            cx.work.bisect_steps = cx.work.bisect_steps.saturating_add(log_steps(set.entries.len()));
+            found.extend(ahead_in(cx, &set.entries, from, up).map(|e| Found {
+                kind,
+                id: e.id,
+                c: e.offset,
+                count: e.count,
+                lo: e.lo,
+                hi: e.hi,
+                also: None,
+            }));
+        }
+    }
+    if let Some(r) = cx.s.align_reach.filter(|r| !matches!(r, Reach::Any)) {
+        let mut near = Vec::new();
+        from_near_objects(cx, r.document(cx.zoom), angle, from, side, Pick::Past(up), &mut near);
+        found.extend(near.into_iter().filter(|f| f.kind == kind));
+    }
+    found.into_iter().min_by(|a, b| (a.c - from).abs().total_cmp(&(b.c - from).abs()).then(a.id.cmp(&b.id)))
 }
 
 /// The nearest line of each kind to the offset `s` of a side of the subject in the direction `angle`.
