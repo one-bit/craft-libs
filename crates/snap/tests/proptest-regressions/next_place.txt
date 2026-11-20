@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 6ffab3c1ec51ab7eec1edabce91a6c1a39571ecf8cc5f985960146198c04cce6 # shrinks to at = [100, 108], drag = 101
+cc 18347feadbeeaa274eb6dd3b799c939afcd79a3cd37c974ff8bb92a8201dbb9d # shrinks to guide_at = [], layout_at = [80, 166], frame_at = [], drag = 101, ranked = false

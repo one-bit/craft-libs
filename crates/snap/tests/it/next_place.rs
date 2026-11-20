@@ -571,6 +571,164 @@ mod resize_past_a_collapse {
         assert_eq!(hit_kinds(&r), vec![(Kind::Layout, None, Some(0.0))]);
     }
 
+    /// The vector of a far fallback: a page with grid lines every 8 and ruler lines every 4 (both from 0), each pulling from any distance and the grid ranked
+    /// before the ruler, at a zoom of 3. `ruler` leaves the ruler on or off.
+    fn grid_and_ruler(ruler: bool) -> Settings {
+        let mut on = vec![(Kind::Grid, Reach::Any, 8)];
+        if ruler {
+            on.push((Kind::Ruler, Reach::Any, 9));
+        }
+        Settings { choose: Choose::Ranked, ..only(&on) }
+    }
+
+    fn lattices_every(grid: f64, ruler: f64) -> [craft_snap::Lattice; 2] {
+        let at = |pitch: f64, kind| craft_snap::Lattice { origin: Point::ORIGIN, pitch: kurbo::Vec2::new(pitch, pitch), kind };
+        [at(grid, Kind::Grid), at(ruler, Kind::Ruler)]
+    }
+
+    /// One side of a box dragged on the page above, the other sides held; the answer checked.
+    fn on_lattices(s: &Settings, dragged: Rect, moving: Edges, lattices: &[craft_snap::Lattice]) -> craft_snap::Snapped {
+        let t = guides(&[], &[]);
+        let q = Query { zoom: 3.0, lattices, ..query(craft_snap::Subject::Edges { frame: rect_box(dragged), moving }, s) };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+        r
+    }
+
+    #[test]
+    fn a_grid_line_that_would_flip_the_box_is_followed_by_a_ruler_line_in_reach_and_not_by_a_grid_line_farther_than_that_one_pulled_from() {
+        // A box from 10 to 11.2 with its right side dragged to 11.21. The grid line at 8 is the nearest (3.21 away) and would turn the box inside out; the
+        // next grid line, 16, is 4.79 away, farther than the first pulled from, and the ruler line at 12 is 0.79 away.
+        let lats = lattices_every(8.0, 4.0);
+        let drag = Rect::new(10.0, 1.0, 11.21, 2.0);
+        let r = on_lattices(&grid_and_ruler(true), drag, right(), &lats);
+        assert!(close(sides(&r), [10.0, 1.0, 12.0, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+        assert_eq!(hit_kinds(&r), vec![(Kind::Ruler, None, Some(0.0))]);
+        assert!((r.hits[0].distance - 0.79).abs() < 1e-9, "{:?}", r.hits);
+        // With the ruler off no other kind is in reach, and the grid line at 16 is past the reach: the side stays where it was dragged, with nothing hit.
+        let r = on_lattices(&grid_and_ruler(false), drag, right(), &lats);
+        assert!(close(sides(&r), [10.0, 1.0, 11.21, 2.0]) && r.hits.is_empty() && r.delta == kurbo::Vec2::ZERO, "{:?} {:?}", sides(&r), r.hits);
+    }
+
+    #[test]
+    fn it_is_the_same_for_the_other_sides_and_across_y() {
+        let lats = lattices_every(8.0, 4.0);
+        let (s, off) = (grid_and_ruler(true), grid_and_ruler(false));
+        // The top side of a box from 10 to 11.2, dragged to 11.21 (the grid line at 8 would flip it).
+        let up = Edges { v_max: true, ..Edges::default() };
+        let r = on_lattices(&s, Rect::new(1.0, 10.0, 2.0, 11.21), up, &lats);
+        assert!(close(sides(&r), [1.0, 10.0, 2.0, 12.0]), "{:?} {:?}", sides(&r), r.hits);
+        assert_eq!(hit_kinds(&r), vec![(Kind::Ruler, None, Some(std::f64::consts::FRAC_PI_2))]);
+        let r = on_lattices(&off, Rect::new(1.0, 10.0, 2.0, 11.21), up, &lats);
+        assert!(close(sides(&r), [1.0, 10.0, 2.0, 11.21]) && r.hits.is_empty(), "{:?} {:?}", sides(&r), r.hits);
+        // The same mirrored about x = 0: the left side of a box from -11.2 to -10, dragged to -11.21, against the grid line at -8; the ruler line is at -12.
+        let left = Edges { u_min: true, ..Edges::default() };
+        let r = on_lattices(&s, Rect::new(-11.21, 1.0, -10.0, 2.0), left, &lats);
+        assert!(close(sides(&r), [-12.0, 1.0, -10.0, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+        assert_eq!(hit_kinds(&r), vec![(Kind::Ruler, None, Some(0.0))]);
+        let r = on_lattices(&off, Rect::new(-11.21, 1.0, -10.0, 2.0), left, &lats);
+        assert!(close(sides(&r), [-11.21, 1.0, -10.0, 2.0]) && r.hits.is_empty(), "{:?} {:?}", sides(&r), r.hits);
+        // And the bottom side of a box from -11.2 to -10 on y.
+        let down = Edges { v_min: true, ..Edges::default() };
+        let r = on_lattices(&s, Rect::new(1.0, -11.21, 2.0, -10.0), down, &lats);
+        assert!(close(sides(&r), [1.0, -12.0, 2.0, -10.0]), "{:?} {:?}", sides(&r), r.hits);
+    }
+
+    #[test]
+    fn a_nearest_grid_line_that_leaves_the_box_a_size_is_met_from_as_far_as_before_and_ranks_before_a_nearer_ruler_line() {
+        // Not a fallback: the right side dragged to 12.5 has the grid line at 16 as its nearest grid line (3.5 away) and it leaves the box a width; it ranks
+        // before the ruler line at 12 (0.5 away), and a grid line pulls from any distance. This is as it was and is not changed.
+        let lats = lattices_every(8.0, 4.0);
+        let r = on_lattices(&grid_and_ruler(true), Rect::new(10.0, 1.0, 12.5, 2.0), right(), &lats);
+        assert!(close(sides(&r), [10.0, 1.0, 16.0, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+        assert_eq!(hit_kinds(&r), vec![(Kind::Grid, None, Some(0.0))]);
+    }
+
+    #[test]
+    fn a_kind_with_a_reach_passes_over_a_line_that_leaves_no_size_to_the_next_line_within_that_reach_however_far_the_first_was() {
+        // The same vector with the grid pulling from 5 inches: the line at 8 (3.21 away) is within it and would flip the box, and the next, 16 (4.79 away),
+        // is within it too. From 4 inches the first pulls and the next does not, and the ruler line at 12 is taken.
+        let lats = lattices_every(8.0, 4.0);
+        let drag = Rect::new(10.0, 1.0, 11.21, 2.0);
+        let mut s = grid_and_ruler(true);
+        s.kinds.set(Kind::Grid, KindRule { on: true, reach: Reach::Document(5.0), priority: 8, scope: craft_snap::Scope::All });
+        let r = on_lattices(&s, drag, right(), &lats);
+        assert!(close(sides(&r), [10.0, 1.0, 16.0, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+        assert_eq!(hit_kinds(&r), vec![(Kind::Grid, None, Some(0.0))]);
+        s.kinds.set(Kind::Grid, KindRule { on: true, reach: Reach::Document(4.0), priority: 8, scope: craft_snap::Scope::All });
+        let r = on_lattices(&s, drag, right(), &lats);
+        assert!(close(sides(&r), [10.0, 1.0, 12.0, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+        assert_eq!(hit_kinds(&r), vec![(Kind::Ruler, None, Some(0.0))]);
+    }
+
+    /// Lines of three kinds across x for a box from 1 whose right side is dragged to `x`, and the rule written out: a guide pulls from 6 screen units, a
+    /// layout line and a frame line from any distance. Of each kind the nearest line is the candidate; if it leaves no width the next line past it (above)
+    /// is, provided that it is in the reach the first pulled from (a guide: its own; the others: no farther than the first was). `ranked` takes the kind
+    /// of the best priority (guide, layout, frame), else the nearest. The lines it may land on (two as near as each other are both right).
+    fn far_expectation(guides_at: &[f64], layout_at: &[f64], frame_at: &[f64], x: f64, ranked: bool) -> Vec<f64> {
+        let one = |at: &[f64], reach: Option<f64>| -> Option<f64> {
+            let nearest = at.iter().copied().min_by(|a, b| (a - x).abs().total_cmp(&(b - x).abs()))?;
+            let first = (nearest - x).abs();
+            if reach.is_some_and(|r| first > r) {
+                return None;
+            }
+            if nearest - 1.0 > 1e-6 {
+                return Some(nearest);
+            }
+            let past = at.iter().copied().filter(|l| *l > nearest + 1e-6).min_by(|a, b| a.total_cmp(b))?;
+            let within = match reach {
+                Some(r) => (past - x).abs() <= r,
+                None => (past - x).abs() <= first + 1e-9,
+            };
+            (within && past - 1.0 > 1e-6).then_some(past)
+        };
+        let cands = [one(guides_at, Some(6.0 / 72.0)), one(layout_at, None), one(frame_at, None)];
+        let best = |c: Vec<f64>| -> Vec<f64> {
+            let least = c.iter().map(|l| (l - x).abs()).fold(f64::INFINITY, f64::min);
+            c.into_iter().filter(|l| ((l - x).abs() - least).abs() < 1e-9).collect()
+        };
+        let have: Vec<f64> = cands.iter().flatten().copied().collect();
+        if have.is_empty() {
+            return vec![x];
+        }
+        if ranked {
+            // The first kind that has a candidate, whatever its distance.
+            return cands.iter().flatten().next().map(|l| vec![*l]).unwrap_or_default();
+        }
+        best(have)
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        /// Against the rule written out, with kinds that pull from any distance beside one that has a reach: the fallback past a line that leaves no size
+        /// never lies farther than the first line did, and the side stays where it was dragged when nothing is in reach.
+        #[test]
+        fn a_fallback_past_a_line_that_leaves_no_size_lies_within_the_reach_the_first_pulled_from(
+            guide_at in prop::collection::vec(80i32..140, 0..4), layout_at in prop::collection::vec(80i32..400, 0..6), frame_at in prop::collection::vec(80i32..400, 0..6),
+            drag in 101i32..140, ranked in any::<bool>(),
+        ) {
+            let to_x = |v: &Vec<i32>| -> Vec<f64> { v.iter().map(|v| f64::from(*v) * 0.01).collect() };
+            let (guides_at, layout_at, frame_at) = (to_x(&guide_at), to_x(&layout_at), to_x(&frame_at));
+            let x = f64::from(drag) * 0.01 - 0.0025;
+            let mut b = TargetsBuilder::new(craft_snap::Limits::default());
+            for (list, kind) in [(&guides_at, Kind::Guide), (&layout_at, Kind::Layout), (&frame_at, Kind::Frame)] {
+                for g in list {
+                    b.line(None, Axis::X, *g, None, kind).unwrap();
+                }
+            }
+            let mut s = only(&[(Kind::Guide, Reach::Screen(6.0), 2), (Kind::Layout, Reach::Any, 3), (Kind::Frame, Reach::Any, 4)]);
+            if ranked {
+                s.choose = Choose::Ranked;
+            }
+            let r = resize(&b.build(), &s, Rect::new(1.0, 1.0, x, 2.0), right(), Constraint::None);
+            let want = far_expectation(&guides_at, &layout_at, &frame_at, x, ranked);
+            let got = sides(&r)[2];
+            prop_assert!(want.iter().any(|w| (got - w).abs() < 1e-9), "got {} want one of {:?} (guides {:?}, layout {:?}, frame {:?}, dragged to {}, ranked {})", got, want, guides_at, layout_at, frame_at, x, ranked);
+            prop_assert_eq!(r.hits.is_empty(), want == vec![x]);
+        }
+    }
+
     /// A fixed seed, so that a run is the same run each time; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and each find is a case to read.
     fn config() -> ProptestConfig {
         let number = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(default);

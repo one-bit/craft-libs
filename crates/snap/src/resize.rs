@@ -239,15 +239,16 @@ fn side_label(id: SideId) -> Side {
 }
 
 /// How a line of a kind meets a degree: not at all (out of reach, or it does not meet the way the degree travels), as a line that would leave the box no
-/// size (collapse or flip), or as a candidate.
+/// size (collapse or flip), with the distance the subject would have travelled to it, or as a candidate.
 enum Fit {
     Out,
-    NoSize,
+    NoSize(f64),
     Cand(Cand),
 }
 
 /// The candidates of one degree: each carried point against the lines of each direction, and the lengths that a size match offers. A line that would
-/// collapse or flip the box is not a candidate, and the next line of its kind in the way the box grows is looked at instead, while it is in reach.
+/// collapse or flip the box is not a candidate, and the next line of its kind in the way the box grows is looked at instead, while it is in reach: for a
+/// kind that pulls from any distance, no farther than the line that would have left no size was.
 fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBounds)]) -> Vec<Cand> {
     let mut out = Vec::new();
     for (p0, w, id, idx) in &deg.carried {
@@ -259,14 +260,18 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
             let s = n.dot(*p0);
             // The way along the normal in which the box grows.
             let up = nw * deg.kind.grows() > 0.0;
-            let fit = |cx: &Ctx<'_>, f: &Found| {
+            // `within` is the farthest a line may be, for the line that stands in for one that left no size, when its kind has no reach to bound it.
+            let fit = |cx: &Ctx<'_>, f: &Found, within: Option<f64>| {
                 let g = (f.c - s) / nw;
                 let travel = g.abs() * w.hypot();
                 if !g.is_finite() || !cx.pulls(f.kind, travel) || cx.too_oblique(f.kind, w.hypot(), nw) {
                     return Fit::Out;
                 }
+                if within.is_some_and(|far| travel > far && !cx.co.same(travel, far)) {
+                    return Fit::Out;
+                }
                 if !deg.kind.valid(&cx.co, own.ext, g) {
-                    return Fit::NoSize;
+                    return Fit::NoSize(travel);
                 }
                 Fit::Cand(Cand {
                     kind: f.kind,
@@ -284,13 +289,16 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
                 })
             };
             for f in lines_near(cx, a, s, label) {
-                match fit(cx, &f) {
+                match fit(cx, &f, None) {
                     Fit::Cand(c) => out.push(c),
                     // The nearest line of this kind leaves no size: with the box some size as dragged, the next line of the kind past it, in the way the box
-                    // grows, is the nearest one that does (every line between the side and this one would have been nearer).
-                    Fit::NoSize => {
+                    // grows, is the nearest one that does (every line between the side and this one would have been nearer). It must lie within the reach
+                    // that line pulled from: a kind with a reach holds it already, one that pulls from any distance (a grid) pulled from the distance of that
+                    // line, and a line farther than that is not taken, or the side would jump past the nearer lines of other kinds.
+                    Fit::NoSize(first) => {
+                        let within = (!cx.reach(f.kind).is_finite()).then_some(first);
                         let next = line_past(cx, a, f.c, label, f.kind, up);
-                        if let Some(Fit::Cand(c)) = next.map(|n| fit(cx, &n)) {
+                        if let Some(Fit::Cand(c)) = next.map(|n| fit(cx, &n, within)) {
                             out.push(c);
                         }
                     }
