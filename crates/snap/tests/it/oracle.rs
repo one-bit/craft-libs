@@ -906,11 +906,13 @@ mod finer_rules {
             // Without the source the check cannot tell, and takes an object that can give places for what it says.
             assert_eq!(forged.check(&t, &q), Ok(()), "{kind:?} {number:?}: the plain check does not read the source");
         }
-        // A mark at a place the source does not have at all (the right kind and number, 1 off), and one naming an object that gives nothing.
-        for (at, id) in [(Point::new(9.0, 9.0 + 1.0e-3), 7), (corner, 8)] {
+        // A mark on a place of the box (its centre, 1.4 from the corner) that the source does not give, though it gives the kind and the number, and a
+        // mark that names an object nobody has: each is refused for the place it names, not for another reason.
+        let centre = Point::new(8.0, 8.0);
+        for (at, id) in [(centre, 7), (corner, 8)] {
             let mut forged = r.clone();
             forged.marks.push(Mark::Place { at, kind: Kind::Point(1), id: Some(Id(id)), number: Some(4), hit: false });
-            assert!(forged.check_with_detail(&t, &q, &mut Pin).is_err(), "{at:?} {id}");
+            assert_eq!(forged.check_with_detail(&t, &q, &mut Pin).err().map(|e| e.rule), Some(want), "{at:?} {id}");
         }
         // The source is asked about the object the mark names and no other, and a mark for a place of the builder is not asked of it at all.
         struct Counting(u32);

@@ -407,6 +407,28 @@ mod tests {
     }
 
     #[test]
+    fn a_lattice_exactly_as_coarse_as_the_same_place_rule_has_no_line_ahead_and_one_a_hair_coarser_has() {
+        let t = built(&[], &[]);
+        let s = Settings::default();
+        // At 0 the rule is its absolute part, with nothing added for a subject at the origin.
+        let tol = Ctx::new(&t, &query(&s)).co.tol(0.0, 0.0);
+        assert_eq!(tol, 1.0e-9);
+        let ahead = |pitch: f64, up: bool| {
+            let lat = [crate::query::Lattice { origin: Point::ORIGIN, pitch: Vec2::new(pitch, pitch), kind: Kind::Grid }];
+            let q = Query { lattices: &lat, ..query(&s) };
+            let mut cx = Ctx::new(&t, &q);
+            lines_ahead(&mut cx, 0.0, 0.0, Side::Mid, up, 0.0).into_iter().filter(|f| f.kind == Kind::Grid).map(|f| f.c).collect::<Vec<f64>>()
+        };
+        for up in [true, false] {
+            assert!(ahead(tol, up).is_empty(), "a pitch that is the rule: its lines are the side's place or the next one's");
+            assert!(ahead(0.5 * tol, up).is_empty());
+        }
+        let coarser = tol.next_up();
+        assert_eq!(ahead(coarser, true), vec![coarser]);
+        assert_eq!(ahead(coarser, false), vec![-coarser]);
+    }
+
+    #[test]
     fn a_lattice_has_a_line_at_every_pitch_and_refuses_a_far_or_bad_one() {
         let t = built(&[], &[]);
         let s = Settings::default();

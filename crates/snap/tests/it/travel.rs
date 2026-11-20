@@ -317,6 +317,10 @@ mod held_move {
             let t = targets(&[(9, -2.0, 0.0), (8, w + 30.0, 10.0)], &[]);
             let r = held(&t, &on_line(), f, Axis::X);
             assert_eq!((r.delta.x, r.hits.first().and_then(|h| h.number)), (-2.0, Some(9)), "width {w}: {r:?}");
+            // A small box (buckets 2 wide) whose left middle is 1 past the right side, on the top line, and one 2 before the left side.
+            let t = targets(&[], &[(7, frame(w + 1.5, 10.0, 1.0, 1.0, 0.0))]);
+            let r = held(&t, &on_line(), f, Axis::X);
+            assert_eq!((r.delta.x, r.hits.first().and_then(|h| h.id)), (1.0, Some(Id(7))), "width {w}: {r:?}");
         }
     }
 }
@@ -671,6 +675,19 @@ mod nudge {
         // Within a step nothing is clamped, and so nothing is said.
         let step = press(&targets(&[(9, 900.0, 5.0)], &[]), &s, subject(), Axis::X, true, NudgeReach::Within(2.0), &[]);
         assert!(!step.work.truncated, "{:?}", step.work);
+        // Along y, up and down: a box 2 wide and 4 high at (5, 0) has its top at 2 and its bottom at -2, on the lines x = 4, 5 and 6.
+        let tall = frame(5.0, 0.0, 2.0, 4.0, 0.0);
+        let along_y = |places: &[(u64, f64, f64)], forward: bool| {
+            let r = press(&targets(places, &[]), &s, tall, Axis::Y, forward, NudgeReach::Anywhere, &[]);
+            (r.delta.y, r.work.truncated, r.work.cut.has(Cuts::WINDOW_VISITS))
+        };
+        assert_eq!(along_y(&[], true), (0.5, false, false));
+        assert_eq!(along_y(&[(9, 5.0, 48.0)], true), (46.0, false, false));
+        assert_eq!(along_y(&[(9, 5.0, 48.5)], true), (0.5, true, true));
+        assert_eq!(along_y(&[(9, 5.0, -30.0)], true), (0.5, false, false), "behind, going up");
+        assert_eq!(along_y(&[(9, 5.0, -48.0)], false), (-46.0, false, false));
+        assert_eq!(along_y(&[(9, 5.0, -49.0)], false), (-0.5, true, true));
+        assert_eq!(along_y(&[(9, 5.0, 30.0)], false), (-0.5, false, false), "behind, going down");
     }
 
     /// A box `w` wide and 10 high whose left side is at 0: its places are on the lines y = 0, 5 and 10, and along x at 0, `w / 2` and `w`.
@@ -717,10 +734,17 @@ mod nudge {
         t.point(Some(Id(2)), Point::new(10.0, 20.0), Kind::Point(0), 2).unwrap();
         let up = press(&t.build(), &s, frame(5.0, 50.0, 10.0, 100.0, 0.0), Axis::Y, true, NudgeReach::Anywhere, &[]);
         assert_eq!((up.delta.y, up.hits[0].number), (1.0, Some(1)), "{up:?}");
-        // With objects: the corners of a box 1 past the subject's leading side are met, a box inside its span too.
+        // With objects: the corners of a box 1 past the subject's leading side are met. Boxes 1 across make buckets 2 wide, and a window of 73 of them was
+        // cut to 48 round the trailing end: the left middle of a small box at 101 (1 past the leading side) is read now, and so is the box 20 past the
+        // trailing one.
         let t = targets(&[], &[(7, frame(111.0, 5.0, 20.0, 10.0, 0.0))]);
         let r = press(&t, &s, wide(100.0), Axis::X, true, NudgeReach::Anywhere, &[]);
         assert_eq!(r.delta.x, 1.0, "{r:?}");
+        let small = targets(&[], &[(7, frame(101.5, 10.0, 1.0, 1.0, 0.0)), (8, frame(20.5, 10.0, 1.0, 1.0, 0.0))]);
+        let r = press(&small, &s, wide(100.0), Axis::X, true, NudgeReach::Anywhere, &[]);
+        assert_eq!((r.delta.x, r.hits[0].id), (1.0, Some(Id(7))), "{r:?}");
+        let r = press(&small, &s, wide(100.0), Axis::X, false, NudgeReach::Anywhere, &[]);
+        assert!(r.delta.x < 0.0 && r.delta.x >= -100.0, "{r:?}");
     }
 }
 

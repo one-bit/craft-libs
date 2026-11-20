@@ -661,6 +661,8 @@ mod beyond {
             if row == SpacingRow::Beyond {
                 assert!((r.delta.x - want).abs() < 1e-9, "want {want}, got {:?} {:?}", r.delta, r.hits);
                 assert_eq!(spacing_hit(&r), Some(Id(1)), "{:?}", r.hits);
+                // The middle place is tried and dropped, and then the gap beyond: each candidate once, so two combinations are solved.
+                assert_eq!(r.work.solves, 2, "{:?}", r.work);
             }
         }
     }

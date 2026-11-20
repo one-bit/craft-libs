@@ -360,7 +360,8 @@ impl Shape {
     fn side(self, other: i64) -> i64 {
         match self {
             Shape::Block => MAX_WINDOW_BUCKETS,
-            Shape::Strip => (MAX_STRIP_BUCKETS / other.clamp(1, MAX_WINDOW_BUCKETS)).max(MAX_WINDOW_BUCKETS),
+            // The other side counts for at most 48, so the quotient is at least 48: a strip is never cut closer than a block.
+            Shape::Strip => MAX_STRIP_BUCKETS / other.clamp(1, MAX_WINDOW_BUCKETS),
         }
     }
 }
@@ -1358,6 +1359,29 @@ mod tests {
         assert!(block.cut);
         assert_eq!(block.items.iter().filter(|c| c.id.0 < 2_000).map(|c| c.id.0).max(), Some(47));
         assert_eq!(block.items.iter().filter(|c| c.id.0 >= 100_000).map(|c| c.id.0).max(), Some(100_047));
+    }
+
+    #[test]
+    fn a_strip_taller_than_it_is_wide_is_cut_by_the_same_rule_down_its_length() {
+        // A column of 2,000 boxes, one to a bucket of 2, with two boxes in the columns beside it.
+        let mut items: Vec<Cell> = (0..2_000u64).map(|i| cell(i, 0.5, i as f64 * 2.0 + 0.5, 1.0, 1.0)).collect();
+        items.extend((0..2u64).map(|i| cell(100_000 + i, (i + 1) as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)));
+        let g = Grid::build(items);
+        assert_eq!(g.cell, 2.0);
+        let near = Some(Point::new(0.5, 0.0));
+        let tallest = |f: &Gather<'_>| f.items.iter().filter(|c| c.id.0 < 2_000).map(|c| c.id.0).max();
+        // One bucket across: all 2,000; two across: 1,152 of them; three across: 768. Not wider than a block is, down its length only.
+        let one = g.gather_strip(&Rect::new(0.0, 0.0, 1.9, 3_999.9), near, 10_000, 100_000);
+        assert!(!one.cut);
+        assert_eq!(tallest(&one), Some(1_999));
+        let two = g.gather_strip(&Rect::new(0.0, 0.0, 3.9, 3_999.9), near, 10_000, 100_000);
+        assert!(two.cut);
+        assert_eq!(tallest(&two), Some(1_151));
+        let three = g.gather_strip(&Rect::new(0.0, 0.0, 5.9, 3_999.9), near, 10_000, 100_000);
+        assert_eq!(tallest(&three), Some(767));
+        // The same windows as blocks keep 48.
+        let block = g.gather_from(&Rect::new(0.0, 0.0, 1.9, 3_999.9), near, 10_000, 100_000);
+        assert_eq!(tallest(&block), Some(47));
     }
 
     #[test]
