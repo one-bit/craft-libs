@@ -187,7 +187,7 @@ Each ported file says where it came from on its first lines. All sources are MIT
 | `spacing` (the three equal-gap cases) | FigCraft `crates/engine/src/canvas/snap.rs` (`spacings`) | the same | Centred between neighbours, and the gap repeated on either side |
 | `spacing` (gap pairs and chains) | VectorCraft `crates/tools/src/guides/targets.rs` (`even_spacing`, `gap_marks`) | `9a01d266b0438f96608c9f75b51437f912587d22` | Each object paired with the next by bisection, any gap in the row repeated, every equal pair marked |
 | `index` (sorted lines) | VectorCraft, the same file | the same | Sorted arrays searched by bisection, and the test that bisection equals a scan |
-| `resize` (resize in a turned frame) | VectorCraft, the same file (`snap_scale`) | the same | One parameter per dragged side or proportional corner; the handle and its side's ends as the points that meet lines; collapse and flip refused, and the next line of the kind or the next length tried |
+| `resize` (resize in a turned frame) | VectorCraft, the same file (`snap_scale`) | the same | One parameter per dragged side or proportional corner; the handle and its side's ends as the points that meet lines; collapse and flip refused |
 | `resize`, `angle` | DesignCraft `crates/tools/src/snap.rs` (`pass_dimensions`, `length_edge_delta`, `match_rotation`) | `47ef1ec411d53e98a31c576d80a1d0e20ef5eb04` | Other objects' own side lengths; the length difference applied at the moving side; rotation match within `atan(zone / radius)` |
 | `moves` (ties, bias) | EffectCraft `crates/engine/src/viewer.rs` (`better`, `POINT_BIAS`) | `60e2cbbbe3d73c0a9074c25a1a615ccfec18721c` | Priority only on ties; the place's bias against a pair of lines |
 | `targets` (shape of the set) | PhotoCraft `crates/engine/src/snap.rs` (`SnapTargets`) | `957b10cccbb4bcd402394d250e52a9b9e1b63d74` | A plain target set built at the press, a span on every target, every side exactly on a target reported |
@@ -207,7 +207,9 @@ the directions and the pairing of up to four of them; the constraint solver; the
 - **VectorCraft's `even_spacing`** is linear over up to 20,000 boxes; here a row is capped at 256 objects, gathered nearest first. Its lines are
   sorted per axis; here they are sorted per direction (any angle), per kind, with equal places grouped. Its `snap_scale` searches one parameter
   for a side or a proportional corner in an oriented box; here the same parameters are degrees of a general solve (a side, a half-size, a scale
-  about a fixed point), a size match is a degree's candidate too, and a candidate that does not hold on the final extents is dropped.
+  about a fixed point), a size match is a degree's candidate too, and a candidate that does not hold on the final extents is dropped. Its `snap_scale`
+  refuses a scale that would collapse the box and tries nothing next; here a line (or a width or height) that would leave the box no size is
+  passed over for the next one of its kind in reach.
 - **DesignCraft** passes in order and the first hit wins; here the settings choose. Its size match reads every item; here the lengths are in
   sorted arrays (or in a `ViewIndex`). Its rotation tolerance is the same, `atan(zone / radius)`.
 - **EffectCraft's** place pulled as a line across a locked drag is not ported as a line: a place pulls a held move only where the subject can land
