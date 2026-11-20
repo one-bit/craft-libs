@@ -141,6 +141,11 @@ impl Weigh<'_> {
         cx.gathered.push(g);
         let rule = cx.rule(g.kind);
         let reach = cx.reach(g.kind);
+        // A nudge stops at the first place ahead: the nearest wins whatever `choose` says, and priority only tells apart places as near as each other.
+        let choose = match self.travel {
+            Some(Travel { way: Way::Ahead { .. }, .. }) => Choose::Nearest,
+            _ => cx.s.choose,
+        };
         for q in self.subject {
             let cand = match self.travel {
                 Some(tr) => on_travel(cx, tr, g, *q, rule.priority, reach),
@@ -159,7 +164,7 @@ impl Weigh<'_> {
                 }
             };
             if let Some(cand) = cand
-                && self.best.is_none_or(|b| order(&cand, &b, cx.s.choose, &cx.co).is_lt())
+                && self.best.is_none_or(|b| order(&cand, &b, choose, &cx.co).is_lt())
             {
                 self.best = Some(cand);
             }

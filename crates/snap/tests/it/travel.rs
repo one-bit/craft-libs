@@ -1,7 +1,7 @@
 //! A subject that travels along one page axis (a move held to it, or a nudge) meets the places on the lines its own places travel along.
 
 use craft_snap::{
-    Anchors, Axis, Constraint, Detail, Id, Kind, Limits, Mark, NudgeReach, Object, Parts, Query, Rounding, Settings, Snapped, Spend, Subject,
+    Anchors, Axis, Choose, Constraint, Detail, Id, Kind, Limits, Mark, NudgeReach, Object, Parts, Query, Rounding, Settings, Snapped, Spend, Subject,
     Targets, TargetsBuilder, TravelPlaces, TurnedBox,
 };
 use kurbo::{BezPath, Point};
@@ -398,6 +398,76 @@ mod nudge {
         assert_eq!((beyond.delta.x, beyond.hits[0].kind), (1.0, Kind::Grid), "the place at 3.5 is 1.5 away");
     }
 
+    /// Under `Choose::Ranked` a move takes the better-ranked place at any distance, but a nudge stops at the first place ahead: the nearer place wins,
+    /// whatever the priorities, and the priority only tells apart places as near as each other.
+    #[test]
+    fn under_ranked_a_nudge_still_stops_at_the_nearest_place_and_priority_only_breaks_a_tie() {
+        // A box 2 by 2 at (1, 1): its right side is at 2 and its places are on the lines y = 0, 1 and 2.
+        let f = frame(1.0, 1.0, 2.0, 2.0, 0.0);
+        let ranked = |connection: u8, other: u8| {
+            let mut s = Settings { choose: Choose::Ranked, ..on_line() };
+            for (kind, priority) in [(Kind::Point(0), connection), (Kind::Point(1), other)] {
+                s.kinds.set(kind, craft_snap::KindRule { on: true, reach: Reach::Screen(6.0), priority, scope: craft_snap::Scope::All });
+            }
+            s
+        };
+        let places = |near: f64, far: f64| {
+            let mut b = TargetsBuilder::new(Limits::default());
+            b.point(Some(Id(1)), Point::new(2.0 + near, 2.0), Kind::Point(1), 1).unwrap();
+            b.point(Some(Id(2)), Point::new(2.0 + far, 2.0), Kind::Point(0), 2).unwrap();
+            b.build()
+        };
+        // The connection point (priority 0) is 3 ahead and the other place (priority 1) is 1 ahead: the nearer one stops it, ranked or not.
+        let t = places(1.0, 3.0);
+        for choose in [Choose::Nearest, Choose::Ranked] {
+            let s = Settings { choose, ..ranked(0, 1) };
+            let r = press(&t, &s, f, Axis::X, true, NudgeReach::Anywhere, &[]);
+            assert_eq!((r.delta.x, r.hits[0].kind, r.hits[0].number), (1.0, Kind::Point(1), Some(1)), "{choose:?}: {r:?}");
+        }
+        // Backward as well: the same two places a box's width off to the left.
+        let mut b = TargetsBuilder::new(Limits::default());
+        b.point(Some(Id(1)), Point::new(-1.0, 0.0), Kind::Point(1), 1).unwrap();
+        b.point(Some(Id(2)), Point::new(-3.0, 0.0), Kind::Point(0), 2).unwrap();
+        let back = press(&b.build(), &ranked(0, 1), f, Axis::X, false, NudgeReach::Anywhere, &[]);
+        assert_eq!((back.delta.x, back.hits[0].number), (-1.0, Some(1)), "{back:?}");
+        // As near as each other, within the same-place rule: the lower priority number wins, under both rules.
+        let tie = places(2.0, 2.0 + 5.0e-10);
+        for choose in [Choose::Nearest, Choose::Ranked] {
+            for (connection, other, want) in [(0, 1, Kind::Point(0)), (1, 0, Kind::Point(1))] {
+                let s = Settings { choose, ..ranked(connection, other) };
+                let r = press(&tie, &s, f, Axis::X, true, NudgeReach::Anywhere, &[]);
+                assert_eq!(r.hits[0].kind, want, "{choose:?} priorities {connection} and {other}: {r:?}");
+                assert!((r.delta.x - 2.0).abs() < 1e-9, "{r:?}");
+            }
+        }
+        // A step that reaches the farther place only does not make it the nearer.
+        let r = press(&t, &ranked(0, 1), f, Axis::X, true, NudgeReach::Within(3.0), &[]);
+        assert_eq!((r.delta.x, r.hits[0].number), (1.0, Some(1)));
+        // The case with an outline: a vertex (priority 1) 1 ahead and a connection point (priority 0) 3 ahead, and nothing else on.
+        let mut b = TargetsBuilder::new(Limits::default());
+        b.point(Some(Id(1)), Point::new(5.0, 2.0), Kind::Point(0), 1).unwrap();
+        let parts = Parts { detail: true, ..Parts::NONE };
+        b.object(Id(9), Object { frame: frame(3.0, 2.25, 0.5, 0.5, 0.0), bounds: None, angle: None, parts }).unwrap();
+        let mut path = BezPath::new();
+        path.move_to((3.0, 2.0));
+        path.line_to((3.2, 2.4));
+        path.line_to((2.8, 2.4));
+        path.close_path();
+        b.path(Id(9), path).unwrap();
+        let t = b.build();
+        let mut s = Settings { choose: Choose::Ranked, ..on_line() };
+        for (kind, priority, on) in [(Kind::Point(0), 0, true), (Kind::Vertex, 1, true), (Kind::Midpoint, 2, false), (Kind::Nearest, 7, false)] {
+            s.kinds.set(kind, craft_snap::KindRule { on, reach: Reach::Screen(6.0), priority, scope: craft_snap::Scope::All });
+        }
+        let r = press(&t, &s, f, Axis::X, true, NudgeReach::Anywhere, &[]);
+        assert_eq!((r.delta.x, r.hits[0].kind), (1.0, Kind::Vertex), "{r:?}");
+        // A held move is another thing: it takes the better-ranked place at any distance within its reach, as it always did.
+        let held_q = Query { constraint: Constraint::Axis(Axis::X), ..query(box_subject(f), &s) };
+        let held = run(&t, &held_q);
+        held.check(&t, &held_q).unwrap();
+        assert_eq!((held.delta.x, held.hits[0].kind), (3.0, Kind::Point(0)), "{held:?}");
+    }
+
     #[test]
     fn the_stop_is_strictly_ahead_and_a_place_behind_stops_the_other_way() {
         let s = on_line();
@@ -602,7 +672,12 @@ mod against_a_scan {
 
     /// The settings with only places on, all of one reach and one priority, so that the nearest is the one that wins and nothing else pulls.
     fn only_places() -> Settings {
-        let mut s = on_line();
+        only_places_ranked(Choose::Nearest, [1, 1, 1])
+    }
+
+    /// The same, with the tie rule and the priorities of the three kinds of place (the app's own, a corner, a side middle) given.
+    fn only_places_ranked(choose: Choose, priorities: [u8; 3]) -> Settings {
+        let mut s = Settings { choose, ..on_line() };
         for k in [
             Kind::Guide,
             Kind::Edge,
@@ -621,8 +696,8 @@ mod against_a_scan {
             r.on = false;
             s.kinds.set(k, r);
         }
-        for k in [Kind::Point(0), Kind::Corner, Kind::SideMiddle] {
-            s.kinds.set(k, craft_snap::KindRule { on: true, reach: craft_snap::Reach::Document(6.25), priority: 1, scope: craft_snap::Scope::All });
+        for (k, priority) in [Kind::Point(0), Kind::Corner, Kind::SideMiddle].into_iter().zip(priorities) {
+            s.kinds.set(k, craft_snap::KindRule { on: true, reach: craft_snap::Reach::Document(6.25), priority, scope: craft_snap::Scope::All });
         }
         s
     }
@@ -709,8 +784,21 @@ mod against_a_scan {
 
     /// A nudge: the signed travel along the axis, checked.
     fn nudge_travel(s: &Scene, axis: Axis, forward: bool, reach: NudgeReach, fallback: f64) -> (Snapped, f64) {
+        nudge_travel_ranked(s, axis, forward, reach, fallback, Choose::Nearest, [1, 1, 1])
+    }
+
+    /// A nudge under a tie rule and priorities.
+    fn nudge_travel_ranked(
+        s: &Scene,
+        axis: Axis,
+        forward: bool,
+        reach: NudgeReach,
+        fallback: f64,
+        choose: Choose,
+        priorities: [u8; 3],
+    ) -> (Snapped, f64) {
         let t = s.targets();
-        let st = only_places();
+        let st = only_places_ranked(choose, priorities);
         let q = query(Subject::Nudge { frame: s.subject, bounds: None, axis, forward, reach, fallback }, &st);
         let r = run(&t, &q);
         r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
@@ -776,10 +864,13 @@ mod against_a_scan {
         #[test]
         fn a_nudge_goes_to_the_nearest_place_strictly_ahead_on_a_line_its_places_travel_along(
             s in scene(), x_axis in any::<bool>(), forward in any::<bool>(), step in prop_oneof![Just(None), Just(Some(2.25f64)), Just(Some(7.75f64))],
+            ranked in any::<bool>(), priorities in (0u8..4, 0u8..4, 0u8..4),
         ) {
             let axis = if x_axis { Axis::X } else { Axis::Y };
             let (reach, limit, fallback) = match step { None => (NudgeReach::Anywhere, f64::INFINITY, 0.75), Some(w) => (NudgeReach::Within(w), w, w) };
-            let (r, got) = nudge_travel(&s, axis, forward, reach, fallback);
+            // The nearest wins under either tie rule and whatever the priorities: they only break a tie.
+            let choose = if ranked { Choose::Ranked } else { Choose::Nearest };
+            let (r, got) = nudge_travel_ranked(&s, axis, forward, reach, fallback, choose, [priorities.0, priorities.1, priorities.2]);
             let want = expected_nudge(&s, axis, forward, limit, fallback);
             prop_assert!((got - want).abs() <= tol(want, got, far_of(&s)), "got {} want {}\n{:?}\n{:?}", got, want, s, r);
         }

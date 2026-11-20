@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 490afe7a25ac5e53c8811e553441398b7c1364cea6a10d4d3a997a18b6204378 # shrinks to s = Scene { points: [(3.0, -0.25), (2.0, 0.75)], objects: [TurnedBox { centre: (0.5, 0.0), size: 0.5W×0.5H, angle: 0.0 }], subject: TurnedBox { centre: (2.0, 1.0), size: 2.5W×2.5H, angle: 0.0 }, own: [] }, x_axis = false, forward = false, step = None, ranked = true, priorities = (1, 0, 0)
