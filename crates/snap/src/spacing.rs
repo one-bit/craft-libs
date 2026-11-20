@@ -398,9 +398,10 @@ pub(crate) fn gap_marks(cx: &mut Ctx<'_>, sol: &Solution, frame: &TurnedBox, pro
     }
     let equal_to_other =
         |g: &GapRec, all: &[GapRec], others: &[GapRec]| all.iter().chain(others.iter()).any(|o| !std::ptr::eq(o, g) && co.same(o.value, g.value));
-    // Under `HitsOnly` only the gap the snap repeated is marked: the subject's gap beside the neighbour it was measured from.
+    // Under `HitsOnly` only the gap the snap repeated is marked: the subject's gap beside the neighbour it was measured from. A move can repeat a
+    // gap in each of up to four directions, so the hit read is the one of this row's direction.
     let snapped = sol.hits.iter().find_map(|h| match h {
-        HitRec::Line(c) if c.kind == Kind::Spacing => Some(c.id),
+        HitRec::Line(c) if c.kind == Kind::Spacing && (c.angle - probe.angle).abs() <= co.angle && (c.own == OwnOrBounds::Own) == own => Some(c.id),
         _ => None,
     });
     let hits_only = cx.s.marks == crate::settings::MarkRule::HitsOnly;

@@ -1,10 +1,10 @@
 //! Scenes, queries and the helpers the integration tests share.
 
 use craft_snap::{
-    Anchors, Axis, Budget, Constraint, Id, Kind, Limits, NoDetail, Object, Parts, Query, Rounding, Settings, Snapped, Subject, Targets,
-    TargetsBuilder, TurnedBox,
+    Anchors, Axis, Budget, Constraint, Frames, Id, Kind, KindRule, Limits, NoDetail, Object, Parts, Query, Reach, Rounding, Scope, Settings, Snapped,
+    Subject, Targets, TargetsBuilder, TurnedBox,
 };
-use kurbo::{Point, Size, Vec2};
+use kurbo::{Point, Rect, Size, Vec2};
 
 pub fn frame(x: f64, y: f64, w: f64, h: f64, angle: f64) -> TurnedBox {
     TurnedBox { centre: Point::new(x, y), size: Size::new(w, h), angle }
@@ -52,4 +52,61 @@ pub fn box_subject<'a>(f: TurnedBox) -> Subject<'a> {
 
 pub fn vec2(x: f64, y: f64) -> Vec2 {
     Vec2::new(x, y)
+}
+
+/// Every kind there is, so that a test turns on only what it asks for.
+pub const KINDS: [Kind; 22] = [
+    Kind::Guide,
+    Kind::Frame,
+    Kind::Layout,
+    Kind::Edge,
+    Kind::Centre,
+    Kind::Grid,
+    Kind::Ruler,
+    Kind::Line(0),
+    Kind::Spacing,
+    Kind::Size,
+    Kind::Angle,
+    Kind::AngleStep,
+    Kind::Point(0),
+    Kind::Point(1),
+    Kind::Corner,
+    Kind::SideMiddle,
+    Kind::Vertex,
+    Kind::Midpoint,
+    Kind::Nearest,
+    Kind::Intersection,
+    Kind::Tangent,
+    Kind::Perpendicular,
+];
+
+/// Settings with every kind off but the ones given, each with its reach and priority (the lower number wins under `Choose::Ranked`).
+pub fn only(on: &[(Kind, Reach, u8)]) -> Settings {
+    let mut s = Settings { frames: Frames { page: true, own: false }, ..Settings::default() };
+    for k in KINDS {
+        s.kinds.set(k, KindRule { on: false, reach: Reach::Screen(6.0), priority: 1, scope: Scope::All });
+    }
+    for (k, reach, priority) in on {
+        s.kinds.set(*k, KindRule { on: true, reach: *reach, priority: *priority, scope: Scope::All });
+    }
+    s
+}
+
+pub fn rect_box(r: Rect) -> TurnedBox {
+    TurnedBox::from_rect(r)
+}
+
+/// Targets of boxes (with their ids), guides across x and layout lines, built as an app would: the boxes give edges, centres and gaps.
+pub fn world(boxes: &[(u64, Rect)], guides_x: &[f64], layout: &[(Axis, f64)]) -> craft_snap::Targets {
+    let mut b = TargetsBuilder::new(craft_snap::Limits::default());
+    for (id, r) in boxes {
+        b.object(Id(*id), Object { frame: rect_box(*r), bounds: Some(*r), angle: Some(0.0), parts: Parts::ALL }).unwrap();
+    }
+    for g in guides_x {
+        b.line(None, Axis::X, *g, None, Kind::Guide).unwrap();
+    }
+    for (axis, at) in layout {
+        b.line(None, *axis, *at, None, Kind::Layout).unwrap();
+    }
+    b.build()
 }
