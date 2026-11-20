@@ -38,6 +38,11 @@ fn keep(r: &Rounding) -> usize {
 /// directions kept.
 const FALLBACKS: usize = 7;
 
+/// The candidates that stand behind the best of a direction: the best `FALLBACKS` of the rest, best first.
+fn fallbacks(rest: Vec<Cand>, choose: Choose, co: &crate::frame::Coincide) -> Vec<Cand> {
+    top(rest, FALLBACKS, choose, co)
+}
+
 /// What a constraint leaves free: the way the candidates are solved, the base move, and which axes the rounding may change.
 struct Freedom {
     free: Free,
@@ -202,6 +207,13 @@ impl Pool<'_> {
     }
 }
 
+/// The first candidate a combination names (the one of the lower direction first) that does not hold where the subject lands, moved by `k` from where the
+/// directions were solved, and its direction. Only the first is read: it is the one that is replaced, and what follows from it is read in its turn.
+fn first_failure(cx: &mut Ctx<'_>, combo: &Combo, k: Vec2, spaced: Option<(&TurnedBox, &[Probe])>) -> Option<(Cand, usize)> {
+    let named = [Some((combo.a, combo.dirs.0)), combo.b.map(|b| (b, combo.dirs.1))];
+    named.into_iter().flatten().find(|(c, _)| !(holds(cx, c, k) && spacing_holds(cx, c, spaced, k)))
+}
+
 /// Chooses the combination, applies the rounding, and checks that every candidate it names still holds; if not, the next. A candidate that fails
 /// where the subject lands is replaced by the next of its direction.
 fn choose(
@@ -224,9 +236,7 @@ fn choose(
         let combo = list.swap_remove(i);
         let k = fr.base + combo.k;
         let k = round_k(&cx.q.rounding, refp, minp, k, fr.on);
-        let named = [Some((combo.a, combo.dirs.0)), combo.b.map(|b| (b, combo.dirs.1))];
-        let failed = named.into_iter().flatten().find(|(c, _)| !(holds(cx, c, k - fr.base) && spacing_holds(cx, c, spaced, k - fr.base)));
-        match failed {
+        match first_failure(cx, &combo, k - fr.base, spaced) {
             None => return Some((k, combo)),
             Some((c, dir)) => list.extend(pool.promote(dir, &c)),
         }
@@ -286,7 +296,7 @@ fn solve_probes(cx: &mut Ctx<'_>, ps: &[Probe], fr: &Freedom, spaced: Option<&Tu
         let (kept, rest) = split_top(cands, n, cx.s.choose, &cx.co);
         // Where a spacing candidate is among the best, the next candidates of the direction stand behind it, whatever they are: it may fail where the
         // subject lands.
-        let spare = if kept.iter().any(|c| c.kind == Kind::Spacing) { top(rest, FALLBACKS, cx.s.choose, &cx.co) } else { Vec::new() };
+        let spare = if kept.iter().any(|c| c.kind == Kind::Spacing) { fallbacks(rest, cx.s.choose, &cx.co) } else { Vec::new() };
         lists.push(kept);
         spares.push(spare);
     }
@@ -570,5 +580,58 @@ mod tests {
         // A nearer fallback goes before a farther one that was kept: a direction's own order is the settings', and the tier breaks a tie only.
         let near = single(cand(Kind::Edge, 2, 0.4, 1, 0.0), 1);
         assert_eq!(combo_order(&near, &kept, Choose::Nearest, &co), Ordering::Less);
+    }
+    #[test]
+    fn a_pair_is_a_combination_within_the_larger_of_the_two_reaches() {
+        let ps = probes();
+        let with_reach = |d: f64, angle: f64, reach: f64| Cand { reach, ..cand(Kind::Edge, 1, d, 1, angle) };
+        // Pulls of 2 and 2 across: a correction of 2.83. Within 5 (the larger) but not within 1.
+        for (ra, rb) in [(1.0, 5.0), (5.0, 1.0), (5.0, 5.0)] {
+            assert!(pair_combo(&with_reach(2.0, 0.0, ra), &with_reach(2.0, FRAC_PI_2, rb), (0, 1), &ps, 0).is_some(), "reaches {ra} and {rb}");
+        }
+        assert!(pair_combo(&with_reach(2.0, 0.0, 2.5), &with_reach(2.0, FRAC_PI_2, 1.0), (0, 1), &ps, 0).is_none(), "2.83 is beyond 2.5 and 1");
+    }
+
+    #[test]
+    fn a_direction_has_seven_fallbacks_the_best_of_the_rest_and_best_first() {
+        let co = Coincide::default();
+        let rest: Vec<Cand> = (0..10u64).rev().map(|i| cand(Kind::Edge, 100 + i, 1.0 + 0.1 * i as f64, 1, 0.0)).collect();
+        let kept = fallbacks(rest, Choose::Nearest, &co);
+        assert_eq!(kept.iter().map(|c| c.id.map(|i| i.0)).collect::<Vec<_>>(), (100..107).map(Some).collect::<Vec<_>>());
+        assert_eq!(fallbacks(Vec::new(), Choose::Nearest, &co).len(), 0);
+        assert_eq!(fallbacks(vec![cand(Kind::Edge, 1, 1.0, 1, 0.0)], Choose::Ranked, &co).len(), 1);
+    }
+
+    #[test]
+    fn the_first_candidate_a_combination_names_that_does_not_hold_is_the_one_replaced() {
+        use crate::budget::Budget;
+        use crate::query::{Constraint, Query, Rounding};
+        use crate::settings::Settings;
+        use crate::targets::{Limits, TargetsBuilder};
+        let t = TargetsBuilder::new(Limits::default()).build();
+        let s = Settings::default();
+        let q = Query {
+            subject: Subject::Point { at: Point::ORIGIN, base: None },
+            zoom: 1.0,
+            settings: &s,
+            constraint: Constraint::None,
+            rounding: Rounding::None,
+            lattices: &[],
+            view: None,
+            budget: Budget::default(),
+        };
+        let mut cx = Ctx::new(&t, &q);
+        // Both sides are 1 short of their lines along their own directions: a moved by (1, 0) is on its line and b by (0, 1) is.
+        let line = |kind: Kind, id: u64, angle: f64| Cand { c: 1.0, s: 0.0, ..cand(kind, id, 1.0, 1, angle) };
+        let (a, b) = (line(Kind::Edge, 1, 0.0), line(Kind::Guide, 2, FRAC_PI_2));
+        let pair = Combo { degrees: 2, k: Vec2::new(1.0, 1.0), a, b: Some(b), tier: 0, dirs: (3, 4) };
+        let single = Combo { degrees: 1, k: Vec2::new(1.0, 0.0), a, b: None, tier: 0, dirs: (3, 3) };
+        let failed = |cx: &mut Ctx<'_>, c: &Combo, k: Vec2| first_failure(cx, c, k, None).map(|(c, d)| (c.id.map(|i| i.0), d));
+        assert_eq!(failed(&mut cx, &pair, Vec2::new(0.0, 0.0)), Some((Some(1), 3)), "both fail: the first is the one");
+        assert_eq!(failed(&mut cx, &pair, Vec2::new(1.0, 0.0)), Some((Some(2), 4)), "a holds, b fails");
+        assert_eq!(failed(&mut cx, &pair, Vec2::new(0.0, 1.0)), Some((Some(1), 3)), "a fails, b holds");
+        assert_eq!(failed(&mut cx, &pair, Vec2::new(1.0, 1.0)), None);
+        assert_eq!(failed(&mut cx, &single, Vec2::new(0.0, 0.0)), Some((Some(1), 3)));
+        assert_eq!(failed(&mut cx, &single, Vec2::new(1.0, 0.0)), None);
     }
 }

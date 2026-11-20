@@ -179,6 +179,73 @@ fn a_move_along_a_ray_from_a_point_off_the_ray_repeats_a_gap_where_it_lands() {
     assert_eq!(hit_kinds(&r), vec![(Kind::Spacing, Some(1), Some(0.0))]);
 }
 
+/// A direction keeps its eight best candidates under a rounding, and its fallbacks (seven more) only behind a spacing candidate: when the eight best are all
+/// taken off their lines by the rounding, a ninth that would hold is not tried.
+#[test]
+fn a_direction_keeps_eight_candidates_under_a_rounding_and_a_ninth_that_would_hold_is_not_tried() {
+    // A box 2 wide at x 4 to 6, held to x, its minimum corner rounded to whole units. Four kinds of line at 4.3, 4.6, 5.3 and 5.6, a pull of 0.3 to 1.7 by
+    // each of the box's three sides (twelve candidates, none on a whole unit, so the rounding takes each off its line), and a fifth kind at 9, a pull
+    // of 3, 4 or 5 that holds. The eight nearest are the eight that fail.
+    let failing = [(Kind::Guide, 4.3), (Kind::Frame, 4.6), (Kind::Layout, 5.3), (Kind::Line(0), 5.6)];
+    let build = |kinds: &[(Kind, f64)]| {
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        for (kind, at) in kinds {
+            b.line(None, Axis::X, *at, None, *kind).unwrap();
+        }
+        b.build()
+    };
+    let rule = |kinds: &[(Kind, f64)]| {
+        let on: Vec<(Kind, Reach, u8)> = kinds.iter().map(|(k, _)| (*k, Reach::Document(10.0), 1)).collect();
+        only(&on)
+    };
+    let ask = |kinds: &[(Kind, f64)]| {
+        let (t, s) = (build(kinds), rule(kinds));
+        let q = Query {
+            constraint: Constraint::Axis(Axis::X),
+            rounding: craft_snap::Rounding::Position(kurbo::Vec2::new(1.0, 0.0)),
+            ..query(box_subject(frame(5.0, 5.0, 2.0, 2.0, 0.0)), &s)
+        };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+        r
+    };
+    let mut all = failing.to_vec();
+    all.push((Kind::Line(1), 9.0));
+    let r = ask(&all);
+    assert_eq!((r.delta.x, r.delta.y), (0.0, 0.0), "{:?}", r.hits);
+    assert!(r.hits.is_empty(), "{:?}", r.hits);
+    // Without the four that fail, the one at 9 is the nearest candidate and holds: a pull of 3 by the high side.
+    let r = ask(&[(Kind::Line(1), 9.0)]);
+    assert_eq!((r.delta.x, hit_kinds(&r)), (3.0, vec![(Kind::Line(1), None, Some(0.0))]));
+}
+
+/// The next line of a kind past one that leaves a resized box no size is the nearest of the kind past that line, and not the nearest past halfway
+/// to the side: a line between them (offered by another set of the kind) is a candidate too, which a rounding may make the one that holds.
+#[test]
+fn the_next_line_of_a_kind_is_the_one_past_the_line_that_leaves_no_size_and_not_the_one_past_halfway_to_the_side() {
+    // The right side of a box from 1 dragged to 1.03. Left edges at 0.3, 0.5 and 1 (the one at 1 would leave it no width) and right edges at 1.01, 1.043
+    // (the nearest of them to the side) and 1.2; a lattice of 0.01 holds 1.01 and takes 1.043 to 1.04.
+    let boxes = [(1, Rect::new(1.0, 5.0, 1.2, 6.0)), (2, Rect::new(0.5, 5.0, 1.043, 6.0)), (3, Rect::new(0.3, 5.0, 1.01, 6.0))];
+    let t = world(&boxes, &[], &[]);
+    let s = only(&[(Kind::Edge, Reach::Screen(6.0), 1)]);
+    let q = Query {
+        zoom: 72.0,
+        rounding: craft_snap::Rounding::Position(kurbo::Vec2::new(0.01, 0.01)),
+        ..query(
+            craft_snap::Subject::Edges {
+                frame: rect_box(Rect::new(1.0, 0.0, 1.03, 1.0)),
+                moving: craft_snap::Edges { u_max: true, ..craft_snap::Edges::default() },
+            },
+            &s,
+        )
+    };
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+    let f = r.frame.expect("a resize has a box");
+    assert!((f.centre.x + 0.5 * f.size.width - 1.01).abs() < 1e-9, "{:?} {:?}", f, r.hits);
+    assert_eq!(hit_kinds(&r), vec![(Kind::Edge, Some(3), Some(0.0))]);
+}
+
 /// A resize whose nearest line of a kind would leave the box no width or height, or turn it inside out, is offered the next line of that kind in reach:
 /// the side goes there, or stays where it was dragged when there is none.
 mod resize_past_a_collapse {
