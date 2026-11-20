@@ -837,7 +837,7 @@ mod against_a_scan {
             s.kinds.set(k, r);
         }
         for (k, priority) in [Kind::Point(0), Kind::Corner, Kind::SideMiddle].into_iter().zip(priorities) {
-            s.kinds.set(k, craft_snap::KindRule { on: true, reach: craft_snap::Reach::Document(6.25), priority, scope: craft_snap::Scope::All });
+            s.kinds.set(k, craft_snap::KindRule { on: true, reach: craft_snap::Reach::Document(REACH), priority, scope: craft_snap::Scope::All });
         }
         s
     }
@@ -956,11 +956,12 @@ mod against_a_scan {
         (r, along)
     }
 
-    /// The expected signed travel of a held move: the nearest meeting within the reach, or none. Ties at one distance on both sides are told by the
-    /// caller (two answers are right).
-    fn expected_held(s: &Scene, axis: Axis) -> Vec<f64> {
-        let far = far_of(s);
-        let within: Vec<f64> = meetings(s, axis, true).into_iter().filter(|d| d.abs() <= 6.25).collect();
+    /// The reach of every place in these scenes, in document units.
+    const REACH: f64 = 6.25;
+
+    /// The signed travels, nearest first, of the meetings within `reach`: those as near as the nearest, to the same-place rule.
+    fn nearest_within(meetings: &[f64], reach: f64, far: f64) -> Vec<f64> {
+        let within: Vec<f64> = meetings.iter().copied().filter(|d| d.abs() <= reach).collect();
         let least = within.iter().map(|d| d.abs()).fold(f64::INFINITY, f64::min);
         let mut best: Vec<f64> = Vec::new();
         for d in within.into_iter().filter(|d| (d.abs() - least).abs() <= tol(least, least, far)) {
@@ -968,8 +969,26 @@ mod against_a_scan {
                 best.push(d);
             }
         }
-        if best.is_empty() {
-            best.push(0.0);
+        best
+    }
+
+    /// The expected signed travel of a held move: the nearest meeting within the reach, or none. Ties at one distance on both sides are told by the
+    /// caller (two answers are right). So is a meeting as far as the reach itself: the oracle adds up a place's travel one way and the crate another, and
+    /// a meeting that is the reach to the rounding of its numbers (a quarter turn leaves a cosine of 6e-17) is inside it by the one and a hair outside it by
+    /// the other. Both are right, so the answers are those with the reach a hair short and a hair long.
+    fn expected_held(s: &Scene, axis: Axis) -> Vec<f64> {
+        let far = far_of(s);
+        let all = meetings(s, axis, true);
+        let edge = tol(REACH, REACH, far);
+        let answers = |reach: f64| {
+            let best = nearest_within(&all, reach, far);
+            if best.is_empty() { vec![0.0] } else { best }
+        };
+        let mut best = answers(REACH - edge);
+        for d in answers(REACH + edge) {
+            if !best.iter().any(|b| (b - d).abs() <= tol(d, *b, far)) {
+                best.push(d);
+            }
         }
         best
     }
@@ -984,6 +1003,28 @@ mod against_a_scan {
     }
 
     /// A fixed seed, so that a run is the same run each time; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and each find is a case to read.
+    /// From a search at another seed (30,000 cases of seed 14): a side middle exactly the reach away through a quarter turn. The crate says it is in reach
+    /// (6.25 is the reach and the travel is exactly 6.25) and meets it; the oracle's own cosine of a quarter turn (6e-17) puts it a hair past, which its
+    /// reach test, with no tolerance, took for out of reach. Not a defect of the crate: the oracle now allows both answers at the reach.
+    #[test]
+    fn a_place_exactly_the_reach_away_through_a_quarter_turn_is_met_and_the_oracle_allows_it() {
+        let box_at = |x: f64, y: f64, w: f64, h: f64| TurnedBox { centre: Point::new(x, y), size: kurbo::Size::new(w, h), angle: FRAC_PI_2 };
+        let s = Scene { points: vec![], objects: vec![box_at(-6.5, 5.5, 0.5, 1.0)], subject: box_at(0.5, -4.5, 20.0, 0.5), own: vec![] };
+        let (r, got) = held_delta(&s, Axis::X);
+        assert_eq!(got, -REACH, "{:?}", r.hits);
+        assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+        let far = far_of(&s);
+        let want = expected_held(&s, Axis::X);
+        assert!(want.iter().any(|w| (got - w).abs() <= tol(*w, got, far)), "got {got} want one of {want:?}");
+        // Nothing within reach by the shorter reach: that answer is allowed too.
+        assert!(want.contains(&0.0), "{want:?}");
+        // With the place a clear 0.01 past the reach nothing is met and the oracle says so alone.
+        let past = Scene { objects: vec![box_at(-6.51, 5.5, 0.5, 1.0)], ..s.clone() };
+        let (r, got) = held_delta(&past, Axis::X);
+        assert!(r.hits.is_empty() && got == 0.0, "{:?}", r.hits);
+        assert_eq!(expected_held(&past, Axis::X), vec![0.0]);
+    }
+
     fn config() -> ProptestConfig {
         let number = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(default);
         ProptestConfig {
@@ -1006,7 +1047,7 @@ mod against_a_scan {
             prop_assert!(want.iter().any(|w| (got - w).abs() <= tol(*w, got, far)), "got {} want one of {:?}\n{:?}\n{:?}", got, want, s, r);
             let across = if axis == Axis::X { r.delta.y } else { r.delta.x };
             prop_assert_eq!(across.to_bits(), 0.0f64.to_bits());
-            if !meetings(&s, axis, true).iter().any(|d| d.abs() <= 6.25) {
+            if !meetings(&s, axis, true).iter().any(|d| d.abs() <= REACH + tol(REACH, REACH, far)) {
                 prop_assert!(r.hits.is_empty(), "no place on a line within reach: {:?}", r);
             }
         }
