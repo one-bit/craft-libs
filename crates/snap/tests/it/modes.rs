@@ -765,6 +765,31 @@ mod nudge_ahead {
     }
 
     #[test]
+    fn a_lattice_no_coarser_than_the_same_place_rule_has_no_stops_and_one_a_little_coarser_has() {
+        // The sides are at -10, 0 and 10, the middle one on a line of every lattice here. Lines closer than the rule are one place with the side, so a
+        // lattice with several of them in a row has no line that is ahead of it: a nudge does not stop a few femtounits away, or fail its own check.
+        let t = scene(&[], &[], &[]);
+        let s = only_lines();
+        let f = frame(0.0, 0.0, 20.0, 4.0, 0.0);
+        for pitch in [1.0e-300, 1.0e-12, 5.0e-10, 9.0e-10, 1.0e-9] {
+            for forward in [true, false] {
+                let r = nudge(&t, &s, &[grid(pitch)], f, Axis::X, forward);
+                assert_eq!((r.delta.x.abs(), r.hits.len()), (0.5, 0), "pitch {pitch:e}, forward {forward}: {r:?}");
+            }
+        }
+        // One just coarser than the rule is a lattice, and the stop is the next line past the rule.
+        for pitch in [1.5e-9, 2.0e-9] {
+            let r = nudge(&t, &s, &[grid(pitch)], f, Axis::X, true);
+            assert!(r.delta.x > 1.0e-9 && r.delta.x < 3.0e-9 && r.hits.iter().all(|h| h.kind == Kind::Grid), "pitch {pitch:e}: {r:?}");
+            assert_eq!(r.hits.len(), 1);
+        }
+        // Along y, and far from the origin where the rule is wider: a pitch of 3e-9 is finer than it at 1e6.
+        let tall = frame(0.0, 1.0e6, 4.0, 20.0, 0.0);
+        let far = nudge(&scene(&[], &[], &[]), &s, &[grid(3.0e-9)], tall, Axis::Y, true);
+        assert_eq!((far.delta.y, far.hits.len()), (0.5, 0), "{far:?}");
+    }
+
+    #[test]
     fn a_guide_behind_stops_a_backward_nudge_and_one_just_past_the_tolerance_counts_as_ahead() {
         let s = only_lines();
         let f = frame(0.0, 0.0, 20.0, 4.0, 0.0);

@@ -225,7 +225,9 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
             continue;
         }
         let (origin, pitch, o) = if axis_x { (lat.origin.x, lat.pitch.x, cx.o.x) } else { (lat.origin.y, lat.pitch.y, cx.o.y) };
-        if !(pitch.is_finite() && pitch > 0.0 && origin.is_finite()) {
+        // Lines no farther apart than the same-place rule are one place with the side or with each other, so none of them is ahead of the side, and
+        // a lattice made of them has no stop.
+        if !(pitch.is_finite() && pitch > cx.co.tol(s, s) && origin.is_finite()) {
             continue;
         }
         let n = (o + s - origin) / pitch;
