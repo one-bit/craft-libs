@@ -291,6 +291,28 @@ mod resize_past_a_collapse {
         );
     }
 
+    #[test]
+    fn a_size_match_offers_the_nearest_length_alone_and_the_next_only_when_that_would_leave_no_size() {
+        // Other shapes are 0.2 and 0.3 wide; the side is dragged to a width of 0.24, nearer to 0.2 (0.04) than to 0.3 (0.06). A lattice of 0.65 holds
+        // the right side at 1.3 (a width of 0.3) and takes 1.2 (a width of 0.2) to it. The nearest length is the candidate, and it does not hold on the
+        // lattice: no other length is tried, and the box is the lattice's, with nothing hit.
+        let boxes = [(1, Rect::new(5.0, 0.0, 5.2, 3.0)), (2, Rect::new(7.0, 0.0, 7.3, 3.0))];
+        let t = world(&boxes, &[], &[]);
+        let s = only(&[(Kind::Size, Reach::Screen(6.0), 1)]);
+        let q = Query {
+            zoom: 72.0,
+            rounding: craft_snap::Rounding::Position(kurbo::Vec2::new(0.65, 0.65)),
+            ..query(craft_snap::Subject::Edges { frame: rect_box(Rect::new(1.0, 1.0, 1.24, 2.0)), moving: right() }, &s)
+        };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap();
+        assert!(close(sides(&r), [1.0, 1.0, 1.3, 2.0]) && r.hits.is_empty(), "{:?} {:?}", sides(&r), r.hits);
+        // Without the lattice the nearest is met.
+        let r = resize(&t, &s, Rect::new(1.0, 1.0, 1.24, 2.0), right(), Constraint::None);
+        assert!(close(sides(&r), [1.0, 1.0, 1.2, 2.0]), "{:?}", sides(&r));
+        assert_eq!(hit_kinds(&r), vec![(Kind::Size, Some(1), None)]);
+    }
+
     /// A fixed seed, so that a run is the same run each time; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and each find is a case to read.
     fn config() -> ProptestConfig {
         let number = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(default);
