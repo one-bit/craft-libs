@@ -10,7 +10,8 @@ use crate::kind::{KindTable, Reach};
 pub enum Choose {
     /// The nearest wins. Priority decides only between distances equal within `coincide`. The default.
     Nearest,
-    /// The lowest priority number wins at any distance. The nearest decides within one priority.
+    /// The lowest priority number wins at any distance. The nearest decides within one priority. A nudge is the exception: it stops at the nearest
+    /// stop ahead of it, whatever the priorities (a nearer place wins over a better-ranked one farther on), and priority only breaks a tie.
     Ranked,
 }
 
@@ -108,7 +109,8 @@ pub enum TravelPlaces {
     Ignore,
     /// A place pulls it where the place lies on the line one of the subject's places travels along (the same line across the axis, within the
     /// same-place rule), and the subject lands on it. A held move takes a place within its kind's reach along the line, either way; a nudge stops at the
-    /// first place strictly ahead, within the nudge's own reach. The kinds that are on, and their priorities, are those of any other place.
+    /// first place strictly ahead, within the nudge's own reach, the nearest whatever its kind and under either [`Choose`] rule. The kinds that are on,
+    /// and their priorities (which only break a tie between places as near as each other), are those of any other place.
     OnLine,
 }
 

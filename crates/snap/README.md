@@ -27,14 +27,18 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
   the dragged box's own; a nudge is not rounded.
 - **Marks come from the final geometry.** After the geometry is known, each side of it is looked up again among the lines, so a mark is there if
   and only if the geometry lies on it: `Mark::Line`, `Gap` (with its value, in chains), `Size`, `Angle` and `Place`. `Snapped::check` verifies
-  every mark, the constraint and the rounding by reading the targets by brute force; it is what the tests assert.
+  every mark, the constraint and the rounding by reading the targets by brute force; it is what the tests assert. It cannot read the detail
+  source, so a place mark of an app's kind that names an object with detail is taken on trust there; `Snapped::check_with_detail` asks the
+  source for the object's places and refuses a mark it does not give.
 - **Equal spacing** snaps one gap and marks every equal gap in the row. **Size and rotation match**, **angle steps**, **object snaps** (vertex,
   midpoint, nearest, intersection, tangent, perpendicular on `BezPath`s), **lattices** and the zoom-following pitch helpers (`grid::doubling`,
   `grid::one_two_five`), and **label placement** (`labels::place`) are in the crate. The crate does not format numbers: an app formats each
   value in its own unit.
 - **Nudge** goes along a page axis to the first target strictly ahead (a line of any kind, a lattice line, the next place that repeats a gap, and,
   with `Settings::nudge_places`, a place on the line one of its places travels along), within one step (`NudgeReach::Within`) or however far
-  (`Anywhere`), else by a fallback distance. The nearest stop wins, whatever its kind.
+  (`Anywhere`), else by a fallback distance. The nearest stop wins, whatever its kind and under either tie rule (`Choose::Ranked` too: a
+  nearer place beats a better-ranked one farther on, and priority only breaks a tie between stops as near as each other). Its other delta is
+  `+0.0` to the bit going either way, never `-0.0`: the two compare equal, but a comparison of the bits tells them apart.
 - **Places on a line of travel.** A subject that travels along one page axis (a move held to it by `Constraint::Axis`, or a nudge) has a line
   of travel for each of its places: the places that are the same across the axis, by the same-place rule, travel along one. A target place
   (the app's own, the corners and side middles of other boxes, and what the detail source gives: connection points, vertices, midpoints,
@@ -42,7 +46,10 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
   `Settings::locked_places` turns this on for a held move: a place within the reach of its kind along the line, either way, pulls, and takes
   the degree before any line does (`Places` decides it as for any other move). `Settings::nudge_places` turns it on for a nudge: the first place
   strictly ahead on a line of travel within the nudge's own reach is a stop, and it is the stop if it comes before the line the nudge would
-  stop on (a tie goes to the lower priority number, and to the line when those are equal). Both are `TravelPlaces::Ignore` by default, as the
+  stop on (a tie goes to the lower priority number, and to the line when those are equal). A line of travel is read as a strip of the grid, as
+  long as the subject and the nudge's lookahead need: up to 2,304 buckets along when it lies in one bucket across, about 1,150 when it lies on a
+  bucket boundary (a line at a whole number does, in buckets of 1); a longer one is cut round the subject's trailing place and says so, so a
+  subject as wide as it likes has the places past each of its corners met, held or nudged. Both are `TravelPlaces::Ignore` by default, as the
   crate was before them: no place pulls a held move or stops a nudge. The subject's places are the nine of its box (corners, side middles,
   centre) and, for a held move, the `own` places that move with it; a place off every line of travel is not a candidate.
 - **Bounded work, reported.** Every cap is charged in real units before the work it stands for; `Snapped::work` holds the counts, the caps met
@@ -69,7 +76,7 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
 
 A query gathers at most `MAX_GATHERS` (16) windows from the bucket grids: up to five to find its candidates (round the subject, and one row along
 each of up to four directions) and the rest to check a candidate again on the geometry it would land on. A window wider than 48 buckets is cut
-to the part round its middle, and says so. The number is a bound on the worst page, not a count of what a query does: an ordinary query gathers
+to the part round its middle, and says so (a strip read for a line of travel is the exception: see above). The number is a bound on the worst page, not a count of what a query does: an ordinary query gathers
 fewer than a dozen windows, a query that is refused gathers none, and one that would gather more is cut at the sixteenth and reports it (`Cuts`, `truncated`).
 Sixteen is kept on purpose: each re-check is one window of at most `window_visits` entries, so a query costs at most sixteen of those and no
 more, however many candidates the page offers.
@@ -93,11 +100,20 @@ with another gets no rotation match, and its work says `truncated` with the `ANG
   lines its places travel along; `Constraint::Ray` solves against lines only. A place that is near a line of travel but not on it (past the
   same-place rule) is not a candidate, because the subject could not land on it: nothing is drawn that the subject does not land on.
 - **A nudge's places are the nine of its box.** `Subject::Nudge` carries no `own` places, so connection points that move with the shape are not
-  met by it; and a place is looked for as far as the buckets of its grid allow, 46 of the finest grid's from the subject (a window past that is
-  cut, and a nudge that looks as far as it can with no line nearer says so with the `WINDOW_VISITS` cut), or only up to the line it would stop on.
+  met by it; and a place is looked for as far as 46 buckets of the finest grid past the subject's leading place, or only up to the line it would
+  stop on. A nudge that looks as far as that and finds the grid holding something past it says so with the `WINDOW_VISITS` cut (it cannot tell
+  what is there without reading it, and a place off every line of travel counts); when the grid holds nothing past it, nothing is said.
+  `CANDIDATES` is set when a strip held more than 64 places or objects (the 64 nearest the trailing place are kept) or was longer than a strip may
+  be. `Within(step)` reads the same-place rule past the step too, since a place that far past it is a stop. A lattice no coarser than the
+  same-place rule has no stops for a nudge (its lines are one place with the side, or with each other).
+- **A wide subject turned off the page axes shares its strips.** A box turned by other than a quarter turn has nine lines of travel, joined into at
+  most four strips by how near they lie; a strip that has to cover more than 2,304 buckets in all (a turned box a hundred buckets across) is cut
+  round its trailing place and says so. A box square to the page, or a quarter turn from it, has three lines and none of this.
 - **A scope that is not `All` is read by `Kind::Size` only.** `KindRule::scope` on any other kind looks at every object.
 - **Only the nearest line of each kind and side is a candidate.** If a verification (a resize that would leave no box, a row that changed) drops it,
   the next nearest line of the same kind is not tried. The result always satisfies `Snapped::check`; it is not always the best one there was.
+  Equal gaps are the exception: a direction that keeps an equal-gap candidate keeps up to seven more behind it, since a gap is read again in the
+  row it lands in and may no longer repeat there.
 - **Row neighbours are read from a strip.** An equal gap is searched among the objects that meet the strip `spacing_reach` long along the row, and
   only the objects that overlap the subject across it by more than the same-place rule (or, linked, are chained to those that do; or, `Beyond`, the
   neighbour on each side and the nearest object wholly beyond it that overlaps it across). `Beyond` does not step onto an object that overlaps the
