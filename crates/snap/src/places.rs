@@ -406,7 +406,9 @@ fn travel_strips(cx: &Ctx<'_>, subject: &[Point], tr: Travel, span: f64, cap: f6
                 Way::Ahead { sign, limit } => {
                     let reach = limit.min(cap);
                     cut |= reach < limit;
-                    if sign > 0.0 { ((lo, hi + reach), lo) } else { ((lo - reach, hi), hi) }
+                    // A place a hair past the step is a stop too (`on_travel` allows the same-place rule), so the strip runs that much farther.
+                    let end = reach + cx.co.tol(reach, reach);
+                    if sign > 0.0 { ((lo, hi + end), lo) } else { ((lo - end, hi), hi) }
                 }
             };
             let mid = 0.5 * (a0 + a1);
@@ -417,6 +419,17 @@ fn travel_strips(cx: &Ctx<'_>, subject: &[Point], tr: Travel, span: f64, cap: f6
         })
         .collect();
     (strips, cut)
+}
+
+/// Whether a grid whose boxes fill `extent` holds anything past the end of a strip, in the way a nudge travels.
+fn lies_past(extent: Option<Rect>, tr: Travel, strips: &[Strip]) -> bool {
+    let (Some(e), Way::Ahead { sign, .. }) = (extent, tr.way) else { return false };
+    strips.iter().any(|s| match (tr.axis, sign > 0.0) {
+        (Axis::X, true) => e.x1 > s.rect.x1,
+        (Axis::X, false) => e.x0 < s.rect.x0,
+        (Axis::Y, true) => e.y1 > s.rect.y1,
+        (Axis::Y, false) => e.y0 < s.rect.y0,
+    })
 }
 
 /// The best place the subject's places can be pulled to, or none. The places weighed are kept in the context for the marks.
@@ -480,18 +493,29 @@ pub(crate) fn solve_places(
     let use_objects = wants_objects && !t.objects.is_empty();
     // The windows: the one round the subject, or a strip along each line of travel (for each grid, as far as its own buckets allow).
     let mut cut = false;
-    let mut strips_for = |cx: &Ctx<'_>, cell: f64| match travel {
+    // A nudge that looks only as far as it may says so when its grid holds anything past where it looked: it cannot tell what that is without reading it.
+    let mut strips_for = |cx: &Ctx<'_>, (cell, extent): (f64, Option<Rect>)| match travel {
         None => vec![Strip { rect: window, near: None }],
         Some(tr) => {
             let (strips, clamped) = travel_strips(cx, subject, tr, span, TRAVEL_BUCKETS * cell);
-            cut |= clamped;
+            cut |= clamped && lies_past(extent, tr, &strips);
             strips
         }
     };
-    let point_cell = if use_points { t.point_grid(&mut cx.work.made).cell() } else { 1.0 };
-    let object_cell = if use_objects { t.object_grid(&mut cx.work.made).cell() } else { 1.0 };
-    let point_strips = if use_points { strips_for(cx, point_cell) } else { Vec::new() };
-    let object_strips = if use_objects { strips_for(cx, object_cell) } else { Vec::new() };
+    let point_grid = if use_points {
+        let g = t.point_grid(&mut cx.work.made);
+        (g.cell(), g.extent())
+    } else {
+        (1.0, None)
+    };
+    let object_grid = if use_objects {
+        let g = t.object_grid(&mut cx.work.made);
+        (g.cell(), g.extent())
+    } else {
+        (1.0, None)
+    };
+    let point_strips = if use_points { strips_for(cx, point_grid) } else { Vec::new() };
+    let object_strips = if use_objects { strips_for(cx, object_grid) } else { Vec::new() };
     if cut {
         cx.work.cut(Cuts::WINDOW_VISITS);
     }
@@ -625,28 +649,44 @@ mod tests {
         Ctx::new(&t, &q).co.tol(5.0, 5.0)
     }
 
+    /// Whether `v` is `end` and the same-place rule more (a stop a hair past the step is a stop), no farther.
+    fn just_past(v: f64, end: f64, tol: f64) -> bool {
+        v > end && v <= end + 2.0 * tol
+    }
+
     #[test]
     fn a_nudge_reads_ahead_from_its_trailing_place_or_its_leading_one_as_far_as_it_may_and_says_when_that_is_less_than_it_asked() {
         let places = [Point::new(1.0, 3.0), Point::new(3.0, 3.0)];
         // Forward along y, 10 asked, 4 allowed: from where the lowest place is to 4 past the highest, and the window was cut.
-        let (up, cut, _) =
+        let (up, cut, tol) =
             strips(&[Point::new(3.0, 1.0), Point::new(3.0, 3.0)], Travel { axis: Axis::Y, way: Way::Ahead { sign: 1.0, limit: 10.0 } }, 10.0, 4.0);
         assert!(cut);
-        assert_eq!((up[0].rect.y0, up[0].rect.y1), (1.0, 7.0));
+        assert_eq!(up[0].rect.y0, 1.0);
+        assert!(just_past(up[0].rect.y1, 7.0, tol), "{:?}", up[0].rect);
         assert_eq!(near(&up[0]).1, 1.0, "read from the trailing place");
         // Backward: from 4 before the lowest to the highest, read from the leading place.
         let (down, cut, _) =
             strips(&[Point::new(3.0, 1.0), Point::new(3.0, 3.0)], Travel { axis: Axis::Y, way: Way::Ahead { sign: -1.0, limit: 10.0 } }, 10.0, 4.0);
         assert!(cut);
-        assert_eq!((down[0].rect.y0, down[0].rect.y1), (-3.0, 3.0));
+        assert_eq!(down[0].rect.y1, 3.0);
+        assert!(just_past(-down[0].rect.y0, 3.0, tol), "{:?}", down[0].rect);
         assert_eq!(near(&down[0]).1, 3.0);
-        // As far as asked, when that is not more than it may: not cut, and the window ends where it was asked to.
+        // As far as asked, when that is not more than it may: not cut, and the window ends where it was asked to (and the rule past it).
         let (short, cut, _) = strips(&places, Travel { axis: Axis::X, way: Way::Ahead { sign: 1.0, limit: 2.0 } }, 2.0, 4.0);
         assert!(!cut);
-        assert_eq!((short[0].rect.x0, short[0].rect.x1), (1.0, 5.0));
+        assert_eq!(short[0].rect.x0, 1.0);
+        assert!(just_past(short[0].rect.x1, 5.0, tol), "{:?}", short[0].rect);
         // A limit that is exactly what may be read is not cut either.
         let (exact, cut, _) = strips(&places, Travel { axis: Axis::X, way: Way::Ahead { sign: 1.0, limit: 4.0 } }, 4.0, 4.0);
-        assert!(!cut && exact[0].rect.x1 == 7.0);
+        assert!(!cut && just_past(exact[0].rect.x1, 7.0, tol));
+        // Far from the origin the rule is wider, and so is what a strip reads past the step.
+        let (far, _, _) = strips(
+            &[Point::new(1.0e6, 3.0), Point::new(1.0e6 + 2.0, 3.0)],
+            Travel { axis: Axis::X, way: Way::Ahead { sign: 1.0, limit: 2.0 } },
+            2.0,
+            4.0,
+        );
+        assert!(far[0].rect.x1 > 1.0e6 + 4.0 && far[0].rect.x1 <= 1.0e6 + 4.0 + 1.0e-6, "{:?}", far[0].rect);
     }
 
     #[test]

@@ -411,6 +411,8 @@ pub(crate) struct Grid {
     big: Vec<u32>,
     /// How many boxes are in a grid coarser than the finest.
     coarse: usize,
+    /// The smallest rectangle that holds every box, none when there is no box with bounds that are numbers.
+    extent: Option<Rect>,
 }
 
 fn bucket_of(v: f64, cell: f64) -> i64 {
@@ -425,6 +427,15 @@ fn ring(cx: i64, cy: i64, r: i64) -> impl Iterator<Item = (i64, i64)> {
     let across = (cx - r..=cx + r).flat_map(move |bx| if r == 0 { vec![(bx, cy)] } else { vec![(bx, cy - r), (bx, cy + r)] });
     let down = (cy - r + 1..=cy + r - 1).flat_map(move |by| [(cx - r, by), (cx + r, by)]);
     across.chain(down)
+}
+
+/// The bucket the rings are walked round: `at` kept inside the window `(x0, y0, x1, y1)` (a `near` far outside it is the bucket of the window nearest
+/// to it, and the rings are those of the window, not of the distance), or the middle of the window when there is no `at`.
+fn centre_of(at: Option<(i64, i64)>, (x0, y0, x1, y1): (i64, i64, i64, i64)) -> (i64, i64) {
+    match at {
+        Some((bx, by)) => (bx.max(x0).min(x1), by.max(y0).min(y1)),
+        None => (x0 + (x1 - x0) / 2, y0 + (y1 - y0) / 2),
+    }
 }
 
 /// The buckets of [`ring`] that lie in the window `(x0, y0, x1, y1)` (bucket numbers, both ends in), in the same order, put in `out`: the cost of
@@ -473,8 +484,12 @@ impl Grid {
         sides.sort_by(f64::total_cmp);
         let median = sides.get(sides.len() / 2).copied().unwrap_or(0.5);
         let cell = (2.0 * median).max(f64::MIN_POSITIVE.sqrt());
-        let mut grid = Grid { cell, items: Vec::new(), levels: Vec::new(), big: Vec::new(), coarse: 0 };
+        let mut grid = Grid { cell, items: Vec::new(), levels: Vec::new(), big: Vec::new(), coarse: 0, extent: None };
         for item in items {
+            let b = item.bounds;
+            if [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite()) {
+                grid.extent = Some(grid.extent.map_or(b, |e| e.union(b)));
+            }
             grid.insert(item);
         }
         grid
@@ -550,6 +565,11 @@ impl Grid {
         self.cell
     }
 
+    /// The smallest rectangle that holds every box whose bounds are numbers, or none when there is none.
+    pub fn extent(&self) -> Option<Rect> {
+        self.extent
+    }
+
     /// As [`Grid::gather`], with the buckets visited in rings round `near` (kept inside the window) and the boxes ranked by their distance to it,
     /// where `gather` takes the middle of the window. A window that is long and thin, or that looks one way from the subject, is read from its end.
     pub fn gather_from(&self, window: &Rect, near: Option<Point>, limit: usize, visits: u64) -> Gather<'_> {
@@ -600,10 +620,7 @@ impl Grid {
                 *hi = start + cap - 1;
             }
         }
-        let (cx, cy) = match at {
-            Some((bx, by)) => (bx.max(x0).min(x1), by.max(y0).min(y1)),
-            None => (x0 + (x1 - x0) / 2, y0 + (y1 - y0) / 2),
-        };
+        let (cx, cy) = centre_of(at, (x0, y0, x1, y1));
         let rings = (cx - x0).max(x1 - cx).max(cy - y0).max(y1 - cy);
         let mut ring = Vec::new();
         for r in 0..=rings {
@@ -1236,6 +1253,42 @@ mod tests {
         assert!(out.is_empty(), "{out:?}");
         ring_in(0, 0, 3, (-3, 0, 3, 0), &mut out);
         assert_eq!(out, vec![(-3, 0), (3, 0)]);
+    }
+
+    #[test]
+    fn the_rings_are_walked_round_the_bucket_of_the_window_nearest_a_near_that_is_far_outside_it() {
+        let window = (0, 0, 47, 47);
+        // Inside: as it is. Outside on one side, on both, and as far as a bucket number goes (2^31, which is where a coordinate 1e12 out falls with
+        // buckets of 1): the nearest bucket of the window. With none, the middle.
+        let far = 1_i64 << 31;
+        assert_eq!(centre_of(Some((10, 20)), window), (10, 20));
+        assert_eq!(centre_of(Some((-5, 20)), window), (0, 20));
+        assert_eq!(centre_of(Some((10, 99)), window), (10, 47));
+        assert_eq!(centre_of(Some((far, -far)), window), (47, 0));
+        assert_eq!(centre_of(Some((-far, far)), window), (0, 47));
+        assert_eq!(centre_of(None, window), (23, 23));
+        assert_eq!(centre_of(None, (-3, 5, 0, 5)), (-2, 5));
+        // So the rings to walk are those of the window: from the centre it clamps to, never so far as the distance of `near`.
+        let rings = |(cx, cy): (i64, i64)| (cx - window.0).max(window.2 - cx).max(cy - window.1).max(window.3 - cy);
+        assert_eq!(rings(centre_of(Some((far, far)), window)), 47);
+        // A gather read from a `near` 1e12 away costs what one read from the window's own edge does: the same buckets in the same rings.
+        let items: Vec<Cell> = (0..40u64).map(|i| cell(i, i as f64 * 2.0 + 0.5, 0.5, 1.0, 1.0)).collect();
+        let g = Grid::build(items);
+        let window = Rect::new(0.0, 0.0, 79.9, 1.0);
+        let out = g.gather_from(&window, Some(Point::new(1.0e12, 0.5)), 5, 100_000);
+        let edge = g.gather_from(&window, Some(Point::new(79.9, 0.5)), 5, 100_000);
+        assert_eq!(ids(&out), ids(&edge));
+        assert_eq!(out.visited, edge.visited);
+    }
+
+    #[test]
+    fn a_grid_knows_the_rectangle_its_boxes_fill_and_leaves_out_boxes_that_are_not_numbers() {
+        assert_eq!(Grid::build(Vec::new()).extent(), None);
+        let g = Grid::build(vec![cell(1, 3.0, -2.0, 1.0, 1.0), cell(2, -5.0, 4.0, 2.0, 0.5), cell(3, 0.0, 0.0, 0.0, 0.0)]);
+        assert_eq!(g.extent(), Some(Rect::new(-5.0, -2.0, 4.0, 4.5)));
+        let bad = Grid::build(vec![cell(1, f64::NAN, 0.0, 1.0, 1.0), cell(2, 0.0, f64::INFINITY, 1.0, 1.0), cell(3, 2.0, 2.0, 1.0, 1.0)]);
+        assert_eq!(bad.extent(), Some(Rect::new(2.0, 2.0, 3.0, 3.0)));
+        assert_eq!(Grid::build(vec![cell(1, f64::NAN, 0.0, 1.0, 1.0)]).extent(), None);
     }
 
     #[test]

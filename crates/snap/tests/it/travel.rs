@@ -521,6 +521,25 @@ mod nudge {
     }
 
     #[test]
+    fn a_place_a_hair_past_the_step_is_a_stop_because_the_same_place_rule_allows_it_and_is_read() {
+        let s = on_line();
+        // The right side is at x0 + 2 and the step is 2, so the window ends at x0 + 4, and a place just past that is on a bucket boundary's far side. The
+        // rule is 1e-9 at the origin and a few times that at 1e6.
+        for x0 in [0.0, 1.0e6] {
+            for (past, stops) in [(0.0, true), (1.2e-10, true), (5.0e-10, true), (1.0e-6, false)] {
+                let t = targets(&[(9, x0 + 4.0 + past, 5.0)], &[]);
+                let r = press(&t, &s, frame(x0, 5.0, 4.0, 2.0, 0.0), Axis::X, true, NudgeReach::Within(2.0), &[]);
+                assert_eq!(r.hits.len(), usize::from(stops), "x0 {x0:e}, {past:e} past the step: {r:?}");
+                assert!((r.delta.x - 2.0).abs() <= if stops { 1.0e-8 } else { 0.0 }, "{r:?}");
+                // The same going the other way: the left side is at x0 - 2.
+                let t = targets(&[(9, x0 - 4.0 - past, 5.0)], &[]);
+                let r = press(&t, &s, frame(x0, 5.0, 4.0, 2.0, 0.0), Axis::X, false, NudgeReach::Within(2.0), &[]);
+                assert_eq!(r.hits.len(), usize::from(stops), "x0 {x0:e}, {past:e} past the step, backward: {r:?}");
+            }
+        }
+    }
+
+    #[test]
     fn a_nudge_along_y_and_a_nudge_of_a_turned_box_meet_the_places_on_their_lines() {
         let s = on_line();
         // Up (y grows): the box's lines are x = -2, 0 and 2. A place at (0, 12) is met by the top middle (0, 6): 6.
@@ -610,7 +629,7 @@ mod nudge {
         // The buckets of a set of places are 1 wide, and a window reads at most 46 of them from the box: a place 40 away is found, one 60 away is not.
         let near = right(&targets(&[(9, 42.0, 5.0)], &[]), &s);
         assert_eq!((near.delta.x, near.hits.len()), (40.0, 1));
-        assert!(near.work.cut.has(Cuts::WINDOW_VISITS), "with no line ahead the window was cut at 46 buckets, found or not");
+        assert!(!near.work.truncated && !near.work.cut.has(Cuts::WINDOW_VISITS), "everything there is lies in the window: {:?}", near.work);
         let far = right(&targets(&[(9, 62.0, 5.0)], &[]), &s);
         assert_eq!((far.delta.x, far.hits.len()), (0.5, 0));
         assert!(far.work.truncated && far.work.cut.has(Cuts::WINDOW_VISITS), "{:?}", far.work);
@@ -620,6 +639,38 @@ mod nudge {
         b.line(Some(Id(1)), Axis::X, 12.0, None, Kind::Guide).unwrap();
         let r = right(&b.build(), &s);
         assert_eq!((r.delta.x, r.hits[0].kind, r.work.truncated), (10.0, Kind::Guide, false));
+    }
+
+    #[test]
+    fn a_nudge_that_looks_as_far_as_it_can_says_so_only_when_the_set_holds_something_past_where_it_looked() {
+        let s = on_line();
+        let report = |t: &Targets, forward: bool| {
+            let r = press(t, &s, subject(), Axis::X, forward, NudgeReach::Anywhere, &[]);
+            (r.delta.x, r.work.truncated, r.work.cut.has(Cuts::WINDOW_VISITS))
+        };
+        // Nothing at all: the fallback, and nothing was left unread.
+        assert_eq!(report(&targets(&[], &[]), true), (0.5, false, false));
+        // One place behind a nudge that goes the other way, or one behind it: the same.
+        let behind = targets(&[(9, -5.0, 5.0)], &[]);
+        assert_eq!(report(&behind, true), (0.5, false, false));
+        // A place ahead inside the window is found, and nothing lies past it.
+        assert_eq!(report(&targets(&[(9, 30.0, 5.0)], &[]), true), (28.0, false, false));
+        // A place just inside the last bucket read (the window ends 46 past the right side, at 48): found, not cut.
+        assert_eq!(report(&targets(&[(9, 48.0, 5.0)], &[]), true), (46.0, false, false));
+        // Something past the window, on the line or not: the nudge cannot know without reading it, and says so.
+        assert_eq!(report(&targets(&[(9, 48.5, 5.0)], &[]), true), (0.5, true, true));
+        assert_eq!(report(&targets(&[(9, 90.0, 400.0)], &[]), true), (0.5, true, true));
+        // The other way: the left side is at -2, and the window runs 46 before it to -48.
+        assert_eq!(report(&targets(&[(9, -48.0, 5.0)], &[]), false), (-46.0, false, false));
+        assert_eq!(report(&targets(&[(9, -49.0, 5.0)], &[]), false), (-0.5, true, true));
+        // Objects are in a grid of buckets 8 wide (twice the longer side of a box 4 across), so a window 46 of them long reads 368 past the subject: the
+        // box at 100 is read, and its left corner is the stop (98 from the right side, 96 on). One past the window says so, and one wholly behind does not.
+        assert_eq!(report(&targets(&[], &[(1, frame(100.0, 5.0, 4.0, 2.0, 0.0))]), true), (96.0, false, false));
+        assert_eq!(report(&targets(&[], &[(1, frame(1000.0, 5.0, 4.0, 2.0, 0.0))]), true), (0.5, true, true));
+        assert_eq!(report(&targets(&[], &[(1, frame(-100.0, 5.0, 4.0, 2.0, 0.0))]), true), (0.5, false, false));
+        // Within a step nothing is clamped, and so nothing is said.
+        let step = press(&targets(&[(9, 900.0, 5.0)], &[]), &s, subject(), Axis::X, true, NudgeReach::Within(2.0), &[]);
+        assert!(!step.work.truncated, "{:?}", step.work);
     }
 
     /// A box `w` wide and 10 high whose left side is at 0: its places are on the lines y = 0, 5 and 10, and along x at 0, `w / 2` and `w`.
@@ -659,7 +710,7 @@ mod nudge {
         let t = two(5001.0, 20.0);
         let far = press(&t, &s, wide(5000.0), Axis::X, true, NudgeReach::Anywhere, &[]);
         assert_eq!((far.delta.x, far.hits[0].number), (20.0, Some(2)), "{far:?}");
-        assert!(far.work.truncated && far.work.cut.has(Cuts::WINDOW_VISITS), "{:?}", far.work);
+        assert!(far.work.truncated && (far.work.cut.has(Cuts::CANDIDATES) || far.work.cut.has(Cuts::WINDOW_VISITS)), "{:?}", far.work);
         // The same along y, for a tall box.
         let mut t = TargetsBuilder::new(Limits::default());
         t.point(Some(Id(1)), Point::new(10.0, 101.0), Kind::Point(0), 1).unwrap();
