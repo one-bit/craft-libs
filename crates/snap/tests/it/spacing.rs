@@ -518,6 +518,40 @@ fn a_chained_row_reads_the_boxes_after_the_subject_wherever_the_origin_of_the_ta
     assert!(r.hits.iter().any(|h| h.kind == Kind::Spacing) && (r.frame.unwrap().centre.x - 52.0).abs() < 1e-9, "{:?} {:?}", r.hits, r.frame);
 }
 
+/// A kept equal-gap candidate has fallbacks, but they are only singles: they stand in for it when it fails where the subject lands, and they are not paired
+/// with a line in the other direction as the kept one could not be. From a random default query that the fallbacks changed: the subject at x 2.75 to 6.25,
+/// y 1.75 to 3.25, five boxes, and the box on its right (id 103) offers a corner and a gap, and the pair of that gap's repeat and an edge below.
+#[test]
+fn the_fallbacks_of_an_equal_gap_do_not_make_a_pair_the_kept_candidate_could_not() {
+    use craft_snap::{Object, Parts, TargetsBuilder, TurnedBox};
+    use kurbo::Rect;
+    let mut b = TargetsBuilder::new(craft_snap::Limits::default());
+    let boxes = [
+        (103, frame(7.75, 1.25, 1.75, 2.0, 0.0), None),
+        (
+            107,
+            frame(-3.5, 2.0, 0.25, 3.5, 1.6126822120568898),
+            Some(Rect::new(-4.902959444242706, 1.841464614347664, -2.097040555757295, 2.158535385652336)),
+        ),
+        (109, frame(-5.5, 1.5, 1.25, 2.25, 0.0), None),
+        (110, frame(-7.25, 0.5, 3.0, 3.5, 0.0), None),
+        (112, frame(-7.5, 5.25, 4.0, 1.0, 1.659064322931946), None),
+    ];
+    for (id, f, bounds) in boxes {
+        let f: TurnedBox = f;
+        b.object(craft_snap::Id(id), Object { frame: f, bounds, angle: None, parts: Parts::ALL }).unwrap();
+    }
+    let t = b.build();
+    let s = Settings::default();
+    let q = craft_snap::Query { zoom: 8.0, ..query(box_subject(frame(4.5, 2.5, 3.5, 1.5, 0.0)), &s) };
+    let r = run(&t, &q);
+    r.check(&t, &q).unwrap();
+    // The corner of the box on its right, as before the fallbacks: one place, no gap.
+    assert_eq!((r.delta.x, r.delta.y), (0.625, -0.25), "{:?} {:?}", r.delta, r.hits);
+    assert_eq!(r.hits.len(), 1);
+    assert_eq!((r.hits[0].kind, r.hits[0].id), (Kind::Corner, Some(craft_snap::Id(103))));
+}
+
 /// The row of an app that reads equal gaps from a strip (`SpacingRow::Beyond`): the neighbour on each side and the nearest object wholly beyond it.
 mod beyond {
     use craft_snap::{Axis, Constraint, Id, Reach, SpacingGaps, SpacingRow, TurnedBox};

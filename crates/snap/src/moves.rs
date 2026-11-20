@@ -33,7 +33,7 @@ fn keep(r: &Rounding) -> usize {
 
 /// How many more spacing candidates a direction keeps once a spacing candidate is among its best. A spacing candidate is read again on the geometry it
 /// lands on, where the row may be another and the gap may no longer repeat; the direction would then have nothing left to try, though another of its
-/// gaps holds there.
+/// gaps holds there. They stand in for the kept one as single-degree combinations only: a pair is made of the candidates each direction kept.
 const SPACING_FALLBACKS: usize = 7;
 
 /// What a constraint leaves free: the way the candidates are solved, the base move, and which axes the rounding may change.
@@ -89,11 +89,11 @@ fn pair_k(a: &Cand, b: &Cand, na: Vec2, nb: Vec2) -> Option<Vec2> {
     k.is_finite().then_some(k)
 }
 
-fn combos(lists: &[Vec<Cand>], probes: &[Probe], free: Free) -> Vec<Combo> {
+fn combos(lists: &[Vec<Cand>], spares: &[Vec<Cand>], probes: &[Probe], free: Free) -> Vec<Combo> {
     let mut out = Vec::new();
-    for (i, list) in lists.iter().enumerate() {
+    for (i, (list, spare)) in lists.iter().zip(spares).enumerate() {
         let Some(pi) = probes.get(i) else { continue };
-        for a in list {
+        for a in list.iter().chain(spare) {
             let k = match free {
                 Free::Normal => pi.normal * a.d,
                 Free::Along(e) => e * a.d,
@@ -229,6 +229,7 @@ pub(crate) fn point_probes(cx: &Ctx<'_>, at: Point) -> Vec<Probe> {
 fn solve_probes(cx: &mut Ctx<'_>, ps: &[Probe], fr: &Freedom, spaced: Option<&TurnedBox>, refp: Point, minp: Point) -> Option<(Vec2, Combo)> {
     let n = keep(&cx.q.rounding);
     let mut lists = Vec::new();
+    let mut spares = Vec::new();
     for p in ps {
         let mut cands = probe_cands(cx, p, fr.free);
         let spacing = match spaced {
@@ -236,14 +237,17 @@ fn solve_probes(cx: &mut Ctx<'_>, ps: &[Probe], fr: &Freedom, spaced: Option<&Tu
             None => Vec::new(),
         };
         cands.extend(spacing.iter().copied());
-        let mut kept = top(cands, n, cx.s.choose, &cx.co);
-        if kept.iter().any(|c| c.kind == Kind::Spacing) {
+        let kept = top(cands, n, cx.s.choose, &cx.co);
+        let spare = if kept.iter().any(|c| c.kind == Kind::Spacing) {
             let rest: Vec<Cand> = spacing.into_iter().filter(|s| !kept.contains(s)).collect();
-            kept.extend(top(rest, SPACING_FALLBACKS, cx.s.choose, &cx.co));
-        }
+            top(rest, SPACING_FALLBACKS, cx.s.choose, &cx.co)
+        } else {
+            Vec::new()
+        };
         lists.push(kept);
+        spares.push(spare);
     }
-    let list = combos(&lists, ps, fr.free);
+    let list = combos(&lists, &spares, ps, fr.free);
     choose(cx, list, fr, spaced.map(|f| (f, ps)), refp, minp)
 }
 
