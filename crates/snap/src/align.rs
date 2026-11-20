@@ -395,7 +395,7 @@ mod tests {
     use crate::budget::Budget;
     use crate::frame::{Axis, TurnedBox};
     use crate::query::{Constraint, Query, Rounding, Subject};
-    use crate::settings::Settings;
+    use crate::settings::{Matching, Settings};
     use crate::targets::{Limits, Object, Parts, TargetsBuilder};
 
     fn query<'a>(s: &'a Settings) -> Query<'a> {
@@ -529,5 +529,131 @@ mod tests {
         let cx = Ctx::new(&t, &q);
         from_lattices(&cx, 0.0, 24.0, Side::Min, false, &mut out);
         assert!(out.is_empty(), "a line number past 2^52 gives no line");
+    }
+    /// The line of kind `kind` strictly past `from` (a document coordinate), as a document coordinate.
+    fn past(cx: &mut Ctx<'_>, from: f64, side: Side, kind: Kind, up: bool) -> Option<f64> {
+        let o = cx.o.x;
+        line_past(cx, 0.0, from - o, side, kind, up).map(|f| f.c + o)
+    }
+
+    #[test]
+    fn the_line_past_a_line_is_the_nearest_of_its_kind_strictly_beyond_it_either_way() {
+        let t = built(&[], &[0.0, 1.0, 2.0, 5.0]);
+        let s = Settings::default();
+        let q = query(&s);
+        let mut cx = Ctx::new(&t, &q);
+        assert_eq!(past(&mut cx, 1.0, Side::Min, Kind::Guide, true), Some(2.0));
+        assert_eq!(past(&mut cx, 1.0, Side::Min, Kind::Guide, false), Some(0.0));
+        assert_eq!(past(&mut cx, 2.0, Side::Min, Kind::Guide, true), Some(5.0));
+        assert_eq!(past(&mut cx, 5.0, Side::Min, Kind::Guide, true), None, "nothing past the last");
+        assert_eq!(past(&mut cx, 0.0, Side::Min, Kind::Guide, false), None, "nothing before the first");
+        // A line the same place as `from` (within the rule) is the place `from` is on, not past it, either side of it.
+        assert_eq!(past(&mut cx, 1.0 - 5.0e-10, Side::Min, Kind::Guide, true), Some(2.0));
+        assert_eq!(past(&mut cx, 1.0 + 5.0e-10, Side::Min, Kind::Guide, false), Some(0.0));
+        assert_eq!(past(&mut cx, 1.0 - 2.0e-9, Side::Min, Kind::Guide, true), Some(1.0), "a line farther than the rule is past it");
+        // Between lines, and the kinds that have none.
+        assert_eq!(past(&mut cx, 3.0, Side::Min, Kind::Guide, true), Some(5.0));
+        assert_eq!(past(&mut cx, 3.0, Side::Min, Kind::Guide, false), Some(2.0));
+        assert_eq!(past(&mut cx, 1.0, Side::Min, Kind::Layout, true), None);
+        assert!(cx.work.bisect_steps > 0, "the bisections are counted");
+    }
+
+    #[test]
+    fn the_line_past_reads_the_kind_asked_for_and_the_matching_rule_and_a_kind_that_is_off() {
+        let boxes =
+            [(1, TurnedBox::square(Point::new(10.0, 0.0), Size::new(4.0, 4.0))), (2, TurnedBox::square(Point::new(20.0, 0.0), Size::new(2.0, 2.0)))];
+        let t = built(&boxes, &[15.0]);
+        let s = Settings::default();
+        let q = query(&s);
+        let mut cx = Ctx::new(&t, &q);
+        // Edges at 8, 12, 19 and 21, centres at 10 and 20, a guide at 15.
+        assert_eq!(past(&mut cx, 8.0, Side::Min, Kind::Edge, true), Some(12.0));
+        assert_eq!(past(&mut cx, 8.0, Side::Min, Kind::Centre, true), Some(10.0));
+        assert_eq!(past(&mut cx, 8.0, Side::Min, Kind::Guide, true), Some(15.0));
+        assert_eq!(past(&mut cx, 12.0, Side::Min, Kind::Edge, false), Some(8.0));
+        // Under like to like an edge is met by a side that is not a middle, and a centre by a middle only.
+        let like = Settings { matching: Matching::LikeToLike, ..Settings::default() };
+        let q = query(&like);
+        let mut cx = Ctx::new(&t, &q);
+        assert_eq!(past(&mut cx, 8.0, Side::Mid, Kind::Edge, true), None);
+        assert_eq!(past(&mut cx, 8.0, Side::Min, Kind::Edge, true), Some(12.0));
+        assert_eq!(past(&mut cx, 8.0, Side::Min, Kind::Centre, true), None);
+        assert_eq!(past(&mut cx, 8.0, Side::Mid, Kind::Centre, true), Some(10.0));
+        // A kind that is off has no lines.
+        let mut off = Settings::default();
+        off.kinds.set(Kind::Edge, crate::kind::KindRule { on: false, ..off.kinds.rule(Kind::Edge) });
+        let q = query(&off);
+        let mut cx = Ctx::new(&t, &q);
+        assert_eq!(past(&mut cx, 8.0, Side::Min, Kind::Edge, true), None);
+        assert_eq!(past(&mut cx, 8.0, Side::Min, Kind::Centre, true), Some(10.0));
+    }
+
+    #[test]
+    fn the_line_past_reads_the_objects_near_the_subject_when_alignment_has_a_reach() {
+        let objects: Vec<(u64, TurnedBox)> =
+            [10.0, 20.0, 30.0].iter().enumerate().map(|(i, x)| (i as u64, TurnedBox::square(Point::new(*x, 0.0), Size::new(2.0, 2.0)))).collect();
+        let t = built(&objects, &[]);
+        let s = Settings { align_reach: Some(Reach::Document(25.0)), ..Settings::default() };
+        let q = query(&s);
+        let mut cx = Ctx::new(&t, &q);
+        cx.region = kurbo::Rect::new(14.0 - t.origin.x, -1.0, 16.0 - t.origin.x, 1.0);
+        // Edges at 9, 11, 19, 21, 29 and 31. From 12 the nearest edge is behind (11), and the one past 12 is 19: the nearest past it, not the nearest
+        // that happens to be past it.
+        assert_eq!(past(&mut cx, 12.0, Side::Min, Kind::Edge, true), Some(19.0));
+        assert_eq!(past(&mut cx, 12.0, Side::Min, Kind::Edge, false), Some(11.0));
+        assert_eq!(past(&mut cx, 11.0, Side::Min, Kind::Edge, true), Some(19.0), "the line `from` is on is not past it");
+        assert_eq!(past(&mut cx, 11.0, Side::Min, Kind::Edge, false), Some(9.0));
+        assert_eq!(past(&mut cx, 31.0, Side::Min, Kind::Edge, true), None);
+        assert_eq!(past(&mut cx, 12.0, Side::Min, Kind::Centre, true), Some(20.0));
+        assert!(!cx.work.made.has(crate::budget::Made::OBJECT_LINES), "the table of the objects' lines is not made");
+    }
+
+    #[test]
+    fn the_line_past_a_lattice_line_is_the_next_line_of_the_lattice_of_that_kind() {
+        let t = built(&[], &[]);
+        let mut s = Settings::default();
+        s.kinds.set(Kind::Ruler, crate::kind::KindRule { on: true, ..s.kinds.rule(Kind::Ruler) });
+        let lat = [
+            crate::query::Lattice { origin: Point::new(0.5, 0.0), pitch: Vec2::new(2.0, 2.0), kind: Kind::Grid },
+            crate::query::Lattice { origin: Point::new(0.0, 0.0), pitch: Vec2::new(0.5, 0.5), kind: Kind::Ruler },
+        ];
+        let q = Query { lattices: &lat, ..query(&s) };
+        let mut cx = Ctx::new(&t, &q);
+        // The grid has lines at 0.5, 2.5, 4.5, ...; the ruler's are every half unit, and the grid's line is not past itself.
+        assert_eq!(past(&mut cx, 2.5, Side::Min, Kind::Grid, true), Some(4.5));
+        assert_eq!(past(&mut cx, 2.5, Side::Min, Kind::Grid, false), Some(0.5));
+        assert_eq!(past(&mut cx, 3.0, Side::Min, Kind::Grid, true), Some(4.5));
+        assert_eq!(past(&mut cx, 2.5, Side::Min, Kind::Ruler, true), Some(3.0));
+        // On the other axis the lattice is the same; along a turned direction it has no lines.
+        let o = cx.o.y;
+        assert_eq!(line_past(&mut cx, FRAC_PI_2, 2.5 - o, Side::Min, Kind::Grid, true).map(|f| f.c + o), Some(4.5 - 0.5));
+        assert!(line_past(&mut cx, 0.5, 2.5, Side::Min, Kind::Grid, true).is_none());
+    }
+
+    #[test]
+    fn a_lattice_line_the_rounding_of_its_number_brings_within_the_rule_is_stepped_past() {
+        // From a sweep of pitches just above the same-place rule at 1e6: the side is on a line, the next is 4.5402e-9 away once its number is
+        // rounded (the pitch is 4.5529e-9 and a number near 1e6 holds 1.2e-10), nearer than the rule's 4.5527e-9, so the stop is the one after.
+        let t = built(&[], &[]);
+        let s = Settings::default();
+        let c = 1.0e6;
+        let pitch = 4.552913998202368e-9;
+        let lat = [crate::query::Lattice { origin: Point::new(c, c), pitch: Vec2::new(pitch, pitch), kind: Kind::Grid }];
+        let q = Query { subject: Subject::Point { at: Point::new(c, c), base: None }, lattices: &lat, ..query(&s) };
+        let mut cx = Ctx::new(&t, &q);
+        let tol = cx.co.tol(c, c);
+        for up in [true, false] {
+            let o = cx.o.x;
+            let found = lines_ahead(&mut cx, 0.0, c - 1.0 - o, Side::Min, up, 0.0);
+            let line = found.iter().find(|f| f.kind == Kind::Grid).map(|f| f.c + o).expect("a lattice of this pitch has lines");
+            let travel = if up { line - (c - 1.0) } else { (c - 1.0) - line };
+            assert!(travel > tol && travel < 3.0 * pitch, "up {up}: stops {travel:e} away (the rule is {tol:e})");
+        }
+        // And a lattice whose neighbours are all inside the rule has no stop at all, whichever way it looks.
+        let fine = [crate::query::Lattice { origin: Point::new(c, c), pitch: Vec2::new(0.9 * tol, 0.9 * tol), kind: Kind::Grid }];
+        let q = Query { subject: Subject::Point { at: Point::new(c, c), base: None }, lattices: &fine, ..query(&s) };
+        let mut cx = Ctx::new(&t, &q);
+        let o = cx.o.x;
+        assert!(lines_ahead(&mut cx, 0.0, c - 1.0 - o, Side::Min, true, 0.0).iter().all(|f| f.kind != Kind::Grid));
     }
 }

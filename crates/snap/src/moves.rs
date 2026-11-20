@@ -8,8 +8,9 @@
 //! Each direction gives at most one best candidate (a few more under a rounding, which may take a candidate off its line). Two candidates
 //! in directions that are not parallel fix the correction exactly; one candidate alone moves the subject along its line's normal; a
 //! constraint leaves one free degree, along which each candidate is solved. The combination that snaps the most degrees wins, then the
-//! settings choose. A candidate that the rounding takes off its line is dropped and the next is tried, so what is drawn is where the subject
-//! lands.
+//! settings choose. A candidate that the rounding takes off its line, or an equal gap that no longer repeats where the subject lands, is dropped and
+//! the next is tried (for a gap, the next candidate of its direction stands in for it, alone and in the pairs it was in), so what is drawn is where
+//! the subject lands.
 
 use std::cmp::Ordering;
 
@@ -400,4 +401,154 @@ pub(crate) fn solve_box(cx: &mut Ctx<'_>, detail: &mut dyn Detail, frame: Turned
     sol.hits = hits;
     sol.frame = Some(TurnedBox { centre: frame.centre + k, ..frame });
     sol
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f64::consts::FRAC_PI_2;
+
+    use super::*;
+    use crate::frame::{Coincide, Id};
+
+    fn cand(kind: Kind, id: u64, d: f64, prio: u8, angle: f64) -> Cand {
+        Cand { kind, id: Some(Id(id)), prio, reach: 5.0, side: Side::Min, own: OwnOrBounds::Bounds, angle, c: 0.0, s: 0.0, d, t: d.abs(), pt: 0 }
+    }
+
+    fn probes() -> Vec<Probe> {
+        vec![
+            Probe { angle: 0.0, normal: Vec2::new(1.0, 0.0), sides: Vec::new() },
+            Probe { angle: FRAC_PI_2, normal: Vec2::new(0.0, 1.0), sides: Vec::new() },
+        ]
+    }
+
+    fn ids(c: &Combo) -> (u64, Option<u64>) {
+        (c.a.id.map_or(0, |i| i.0), c.b.and_then(|b| b.id).map(|i| i.0))
+    }
+
+    #[test]
+    fn a_candidate_that_failed_brings_in_the_next_of_its_direction_in_the_pairs_it_was_in() {
+        let ps = probes();
+        let (a0, a1, a2) = (cand(Kind::Spacing, 1, 1.0, 1, 0.0), cand(Kind::Edge, 2, 2.0, 1, 0.0), cand(Kind::Guide, 3, 3.0, 1, 0.0));
+        let b0 = cand(Kind::Edge, 4, 0.5, 1, FRAC_PI_2);
+        let mut pool = Pool { probes: &ps, free: Free::Normal, lists: vec![vec![a0], vec![b0]], spares: vec![vec![a1, a2], Vec::new()] };
+        // The failed one is the last its direction has offered: the next is offered, and pairs with what the other direction offers.
+        let made = pool.promote(0, &a0);
+        assert_eq!(made.len(), 1);
+        let m = &made[0];
+        assert_eq!((ids(m), m.degrees, m.tier, m.dirs), ((2, Some(4)), 2, 1, (0, 1)));
+        assert_eq!(m.k, Vec2::new(2.0, 0.5), "the pair is solved for the two lines");
+        assert_eq!(pool.lists[0], vec![a0, a1]);
+        assert_eq!(pool.spares[0], vec![a2]);
+        // The same candidate failing again (alone, after the pair) is no longer the last: nothing more is offered.
+        assert!(pool.promote(0, &a0).is_empty());
+        assert_eq!((pool.lists[0].len(), pool.spares[0].len()), (2, 1));
+        // The one brought in fails in its turn: the next after it.
+        let made = pool.promote(0, &a1);
+        assert_eq!(made.iter().map(ids).collect::<Vec<_>>(), vec![(3, Some(4))]);
+        assert_eq!((pool.lists[0].len(), pool.spares[0].len()), (3, 0));
+        // Nothing is left behind it.
+        assert!(pool.promote(0, &a2).is_empty());
+    }
+
+    #[test]
+    fn a_fallback_pairs_with_every_candidate_the_other_directions_offer_with_the_lower_direction_first() {
+        let ps = probes();
+        let (a0, b0, b1, b2) = (
+            cand(Kind::Edge, 1, 1.0, 1, 0.0),
+            cand(Kind::Edge, 4, 0.5, 1, FRAC_PI_2),
+            cand(Kind::Guide, 5, 0.7, 1, FRAC_PI_2),
+            cand(Kind::Guide, 6, 0.9, 1, FRAC_PI_2),
+        );
+        // Direction 1 brings in b2 behind b1 (its last), and pairs it with both candidates direction 0 offers.
+        let mut pool = Pool { probes: &ps, free: Free::Normal, lists: vec![vec![a0], vec![b0, b1]], spares: vec![Vec::new(), vec![b2]] };
+        let made = pool.promote(1, &b1);
+        assert_eq!(made.iter().map(|c| (ids(c), c.dirs)).collect::<Vec<_>>(), vec![((1, Some(6)), (0, 1))], "a is from the lower direction");
+        assert_eq!(pool.lists[1], vec![b0, b1, b2]);
+        // A candidate of the other direction pairs with each of this direction's: those it kept and those brought in.
+        let mut pool = Pool {
+            probes: &ps,
+            free: Free::Normal,
+            lists: vec![vec![a0], vec![b0, b1]],
+            spares: vec![vec![cand(Kind::Guide, 2, 1.5, 1, 0.0)], Vec::new()],
+        };
+        let made = pool.promote(0, &a0);
+        assert_eq!(made.iter().map(|c| (ids(c), c.dirs)).collect::<Vec<_>>(), vec![((2, Some(4)), (0, 1)), ((2, Some(5)), (0, 1))]);
+    }
+
+    #[test]
+    fn nothing_is_brought_in_for_a_move_along_a_line_or_when_the_direction_has_nothing_behind_it() {
+        let ps = probes();
+        let (a0, a1) = (cand(Kind::Spacing, 1, 1.0, 1, 0.0), cand(Kind::Edge, 2, 2.0, 1, 0.0));
+        let b0 = cand(Kind::Edge, 4, 0.5, 1, FRAC_PI_2);
+        let mut along =
+            Pool { probes: &ps, free: Free::Along(Vec2::new(1.0, 0.0)), lists: vec![vec![a0], vec![b0]], spares: vec![vec![a1], Vec::new()] };
+        assert!(along.promote(0, &a0).is_empty());
+        assert_eq!((along.lists[0].len(), along.spares[0].len()), (1, 1), "the spare stays: a move along a line makes no pairs");
+        let mut bare = Pool { probes: &ps, free: Free::Normal, lists: vec![vec![a0], vec![b0]], spares: vec![Vec::new(), Vec::new()] };
+        assert!(bare.promote(0, &a0).is_empty() && bare.promote(1, &b0).is_empty());
+        // A direction that is not there is nothing to promote in.
+        assert!(bare.promote(7, &a0).is_empty());
+        // A candidate that is not the last of its direction (one the direction did not offer) brings nothing in.
+        let mut other = Pool { probes: &ps, free: Free::Normal, lists: vec![vec![a0], vec![b0]], spares: vec![vec![a1], Vec::new()] };
+        assert!(other.promote(0, &cand(Kind::Guide, 9, 1.0, 1, 0.0)).is_empty());
+        assert_eq!(other.lists[0], vec![a0]);
+    }
+
+    #[test]
+    fn the_combinations_are_what_each_direction_kept_alone_and_paired_and_its_fallbacks_alone() {
+        let ps = probes();
+        let (a0, a1) = (cand(Kind::Spacing, 1, 1.0, 1, 0.0), cand(Kind::Edge, 2, 2.0, 1, 0.0));
+        let (b0, b1) = (cand(Kind::Edge, 4, 0.5, 1, FRAC_PI_2), cand(Kind::Guide, 5, 0.7, 1, FRAC_PI_2));
+        let list = combos(&[vec![a0], vec![b0]], &[vec![a1], vec![b1]], &ps, Free::Normal);
+        let seen: Vec<_> = list.iter().map(|c| (ids(c), c.degrees, c.tier, c.dirs)).collect();
+        assert_eq!(
+            seen,
+            vec![
+                ((1, None), 1, 0, (0, 0)),
+                ((2, None), 1, 1, (0, 0)),
+                ((4, None), 1, 0, (1, 1)),
+                ((5, None), 1, 1, (1, 1)),
+                ((1, Some(4)), 2, 0, (0, 1)),
+            ],
+            "no pair is made of a fallback"
+        );
+        assert_eq!(list[0].k, Vec2::new(1.0, 0.0));
+        assert_eq!(list[2].k, Vec2::new(0.0, 0.5));
+        // Along a line only the singles are made.
+        let along = combos(&[vec![a0], vec![b0]], &[vec![a1], vec![b1]], &ps, Free::Along(Vec2::new(1.0, 0.0)));
+        assert_eq!(along.len(), 4);
+        assert!(along.iter().all(|c| c.degrees == 1));
+        assert_eq!(along[0].k, Vec2::new(1.0, 0.0), "the way along the line");
+    }
+
+    #[test]
+    fn a_pair_beyond_the_larger_reach_is_no_combination() {
+        let ps = probes();
+        let near = |d: f64, angle: f64| Cand { reach: 1.0, ..cand(Kind::Edge, 1, d, 1, angle) };
+        assert!(pair_combo(&near(0.6, 0.0), &near(0.7, FRAC_PI_2), (0, 1), &ps, 0).is_some_and(|c| (c.degrees, c.tier) == (2, 0)));
+        assert!(pair_combo(&near(0.8, 0.0), &near(0.7, FRAC_PI_2), (0, 1), &ps, 0).is_none(), "a pair 1.06 away from a reach of 1");
+        assert!(pair_combo(&near(0.6, 0.0), &near(0.7, 0.0), (0, 0), &ps, 0).is_none(), "directions that are one direction fix nothing");
+        assert!(pair_combo(&near(0.6, 0.0), &near(0.7, FRAC_PI_2), (0, 5), &ps, 0).is_none(), "a direction that is not there");
+        // Where neither kind has a reach, a few times the farther pull is the limit.
+        let free = |d: f64, angle: f64| Cand { reach: f64::INFINITY, ..cand(Kind::Grid, 1, d, 1, angle) };
+        assert!(pair_combo(&free(1.0, 0.0), &free(1.0, FRAC_PI_2), (0, 1), &ps, 1).is_some_and(|c| c.tier == 1));
+    }
+
+    #[test]
+    fn of_two_combinations_as_good_the_one_of_what_a_direction_kept_goes_first_and_more_degrees_beat_both() {
+        let co = Coincide::default();
+        let (a, b) = (cand(Kind::Edge, 1, 1.0, 1, 0.0), cand(Kind::Edge, 1, 1.0, 1, 0.0));
+        let single = |c: Cand, tier: u8| Combo { degrees: 1, k: Vec2::new(c.d, 0.0), a: c, b: None, tier, dirs: (0, 0) };
+        let (kept, spare) = (single(a, 0), single(b, 1));
+        for choose in [Choose::Nearest, Choose::Ranked] {
+            assert_eq!(combo_order(&kept, &spare, choose, &co), Ordering::Less);
+            assert_eq!(combo_order(&spare, &kept, choose, &co), Ordering::Greater);
+            // A pair of a fallback beats a single of what was kept, whatever its length: it snaps more of the box.
+            let pair = Combo { degrees: 2, k: Vec2::new(9.0, 9.0), a: b, b: Some(b), tier: 1, dirs: (0, 1) };
+            assert_eq!(combo_order(&pair, &kept, choose, &co), Ordering::Less);
+        }
+        // A nearer fallback goes before a farther one that was kept: a direction's own order is the settings', and the tier breaks a tie only.
+        let near = single(cand(Kind::Edge, 2, 0.4, 1, 0.0), 1);
+        assert_eq!(combo_order(&near, &kept, Choose::Nearest, &co), Ordering::Less);
+    }
 }

@@ -276,4 +276,22 @@ mod tests {
         assert!(turned.sides[0].offset == -5.0 && turned.sides[0].lo == -2.0 && turned.sides[0].hi == 1.0, "{turned:?}");
         assert_eq!(probes(&lines, &co, &|l| l.own == OwnOrBounds::Own).len(), 2);
     }
+    #[test]
+    fn the_best_candidates_are_split_from_the_rest_and_nothing_is_lost() {
+        let co = Coincide::default();
+        let list: Vec<Cand> = (0..6u8).map(|i| cand(f64::from(i), i % 2, 10 + u64::from(i))).collect();
+        let (kept, rest) = split_top(list.clone(), 2, Choose::Nearest, &co);
+        let kept_ids: Vec<_> = kept.iter().map(|c| c.id).collect();
+        assert_eq!(kept_ids, vec![Some(Id(10)), Some(Id(11))], "best first");
+        let mut all: Vec<_> = kept.iter().chain(&rest).map(|c| c.id.map(|i| i.0)).collect();
+        all.sort();
+        assert_eq!(all, (10..16).map(Some).collect::<Vec<_>>());
+        assert_eq!(rest.len(), 4);
+        // Asked for more than there are, it keeps all and leaves none; top is its first half.
+        let (kept, rest) = split_top(list.clone(), 9, Choose::Nearest, &co);
+        assert_eq!((kept.len(), rest.len()), (6, 0));
+        assert_eq!(top(list.clone(), 2, Choose::Nearest, &co).iter().map(|c| c.id).collect::<Vec<_>>(), kept_ids);
+        let (kept, rest) = split_top(list, 0, Choose::Nearest, &co);
+        assert_eq!((kept.len(), rest.len()), (0, 6));
+    }
 }

@@ -20,7 +20,11 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
   `far` cannot say; a query does that itself for the largest coordinate of its subject and of the result).
 - **Constraints and rounding are solved inside the snap.** An axis lock, a ray, a kept aspect ratio (from a corner or a side handle), sides that
   move together, a hard lattice of angles, and a rounding lattice all limit the candidates, so the result satisfies them. A candidate that a
-  rounding takes off its line is dropped and the next is tried. A resize under a rounding rounds the point that leads the drag: the middle of a
+  rounding takes off its line is dropped and the next is tried. So is an equal gap that no longer repeats where the subject lands: the next
+  candidate of its direction (a line, or another gap) stands in for it, alone and in the pairs it was in; a pair that is made of such a candidate
+  is made only after one has failed, so a query where every candidate holds is as it would be without them. A resize does not offer a line, or a
+  width or height, that would leave the box no size (collapse it, or turn it inside out): it offers the next line of that kind in the way the box
+  grows, or the next length, in reach. A resize under a rounding rounds the point that leads the drag: the middle of a
   dragged side, or, with the proportions kept, the dragged corner. The leading point lands on the lattice along the page axis it moves along most,
   and the other coordinate follows the drag (or the ratio). This holds for a turned box as for one square to the page. A rounding that would
   collapse or flip the box is not made. The ratio of a kept aspect is the ratio the result has, not
@@ -29,7 +33,8 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
   and only if the geometry lies on it: `Mark::Line`, `Gap` (with its value, in chains), `Size`, `Angle` and `Place`. `Snapped::check` verifies
   every mark, the constraint and the rounding by reading the targets by brute force; it is what the tests assert. It cannot read the detail
   source, so a place mark of an app's kind that names an object with detail is taken on trust there; `Snapped::check_with_detail` asks the
-  source for the object's places and refuses a mark it does not give.
+  source for the object's places and refuses a mark it does not give. A move can repeat a gap in each of its directions (up to four, with a turned
+  box's own); under `MarkRule::HitsOnly` the gaps of each direction's row are marked from that direction's own hit.
 - **Equal spacing** snaps one gap and marks every equal gap in the row. **Size and rotation match**, **angle steps**, **object snaps** (vertex,
   midpoint, nearest, intersection, tangent, perpendicular on `BezPath`s), **lattices** and the zoom-following pitch helpers (`grid::doubling`,
   `grid::one_two_five`), and **label placement** (`labels::place`) are in the crate. The crate does not format numbers: an app formats each
@@ -105,7 +110,8 @@ with another gets no rotation match, and its work says `truncated` with the `ANG
   what is there without reading it, and a place off every line of travel counts); when the grid holds nothing past it, nothing is said.
   `CANDIDATES` is set when a strip held more than 64 places or objects (the 64 nearest the trailing place are kept) or was longer than a strip may
   be. `Within(step)` reads the same-place rule past the step too, since a place that far past it is a stop. A lattice no coarser than the
-  same-place rule has no stops for a nudge (its lines are one place with the side, or with each other).
+  same-place rule has no stops for a nudge (its lines are one place with the side, or with each other); one a hair coarser steps past a line that
+  the rounding of its number has brought within the rule (up to four lines are looked at).
 - **A wide subject turned off the page axes shares its strips.** A box turned by other than a quarter turn has nine lines of travel, joined into at
   most four strips by how near they lie; a strip that has to cover more than 2,304 buckets in all (a turned box a hundred buckets across) is cut
   round its trailing place and says so. A box square to the page, or a quarter turn from it, has three lines and none of this.
@@ -181,7 +187,7 @@ Each ported file says where it came from on its first lines. All sources are MIT
 | `spacing` (the three equal-gap cases) | FigCraft `crates/engine/src/canvas/snap.rs` (`spacings`) | the same | Centred between neighbours, and the gap repeated on either side |
 | `spacing` (gap pairs and chains) | VectorCraft `crates/tools/src/guides/targets.rs` (`even_spacing`, `gap_marks`) | `9a01d266b0438f96608c9f75b51437f912587d22` | Each object paired with the next by bisection, any gap in the row repeated, every equal pair marked |
 | `index` (sorted lines) | VectorCraft, the same file | the same | Sorted arrays searched by bisection, and the test that bisection equals a scan |
-| `resize` (resize in a turned frame) | VectorCraft, the same file (`snap_scale`) | the same | One parameter per dragged side or proportional corner; the handle and its side's ends as the points that meet lines; collapse and flip refused |
+| `resize` (resize in a turned frame) | VectorCraft, the same file (`snap_scale`) | the same | One parameter per dragged side or proportional corner; the handle and its side's ends as the points that meet lines; collapse and flip refused, and the next line of the kind or the next length tried |
 | `resize`, `angle` | DesignCraft `crates/tools/src/snap.rs` (`pass_dimensions`, `length_edge_delta`, `match_rotation`) | `47ef1ec411d53e98a31c576d80a1d0e20ef5eb04` | Other objects' own side lengths; the length difference applied at the moving side; rotation match within `atan(zone / radius)` |
 | `moves` (ties, bias) | EffectCraft `crates/engine/src/viewer.rs` (`better`, `POINT_BIAS`) | `60e2cbbbe3d73c0a9074c25a1a615ccfec18721c` | Priority only on ties; the place's bias against a pair of lines |
 | `targets` (shape of the set) | PhotoCraft `crates/engine/src/snap.rs` (`SnapTargets`) | `957b10cccbb4bcd402394d250e52a9b9e1b63d74` | A plain target set built at the press, a span on every target, every side exactly on a target reported |

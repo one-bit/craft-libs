@@ -10,12 +10,13 @@
 //! scale about a fixed corner when the proportions are kept. Every point a degree carries (the two ends and the middle of each moving side)
 //! moves linearly with `g`, so a line `n · p = c` is met at `g = (c - n · p0) / (n · w)`. A line in the side's own direction pulls it
 //! directly; a line in another direction pulls it through the points it carries. A size match is the same with a length for a line. A
-//! candidate that would collapse or flip the box is not offered. (The one-parameter search for a side or a proportional corner, the travel
+//! candidate that would collapse or flip the box is not offered; the next line of its kind in the way the box grows (or the next length) is, while it
+//! is in reach. (The one-parameter search for a side or a proportional corner, the travel
 //! limit, and the collapse and flip refusals follow VectorCraft's `snap_scale`; see the README.)
 
 use kurbo::{Point, Vec2};
 
-use crate::align::{line_past, lines_near};
+use crate::align::{Found, line_past, lines_near};
 use crate::ctx::{Cand, Ctx, Probe, ProbeSide, top};
 use crate::frame::{OwnOrBounds, Side, TurnedBox};
 use crate::kind::Kind;
@@ -237,9 +238,13 @@ fn side_label(id: SideId) -> Side {
     if matches!(id, SideId::UMin | SideId::VMin) { Side::Min } else { Side::Max }
 }
 
-/// How many lines of a kind are looked at past the nearest when the nearest would leave the box no size: the next one in the way the box grows is on the
-/// far side of the side's place, and each after it is farther. Only a box that was already dragged to nothing can need more than one.
-const LINES_PAST: usize = 3;
+/// How a line of a kind meets a degree: not at all (out of reach, or it does not meet the way the degree travels), as a line that would leave the box no
+/// size (collapse or flip), or as a candidate.
+enum Fit {
+    Out,
+    NoSize,
+    Cand(Cand),
+}
 
 /// The candidates of one degree: each carried point against the lines of each direction, and the lengths that a size match offers. A line that would
 /// collapse or flip the box is not a candidate, and the next line of its kind in the way the box grows is looked at instead, while it is in reach.
@@ -254,33 +259,42 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
             let s = n.dot(*p0);
             // The way along the normal in which the box grows.
             let up = nw * deg.kind.grows() > 0.0;
-            for found in lines_near(cx, a, s, label) {
-                let mut f = found;
-                for _ in 0..=LINES_PAST {
-                    let g = (f.c - s) / nw;
-                    let travel = g.abs() * w.hypot();
-                    if !g.is_finite() || !cx.pulls(f.kind, travel) || cx.too_oblique(f.kind, w.hypot(), nw) {
-                        break;
+            let fit = |cx: &Ctx<'_>, f: &Found| {
+                let g = (f.c - s) / nw;
+                let travel = g.abs() * w.hypot();
+                if !g.is_finite() || !cx.pulls(f.kind, travel) || cx.too_oblique(f.kind, w.hypot(), nw) {
+                    return Fit::Out;
+                }
+                if !deg.kind.valid(&cx.co, own.ext, g) {
+                    return Fit::NoSize;
+                }
+                Fit::Cand(Cand {
+                    kind: f.kind,
+                    id: f.id,
+                    prio: cx.rule(f.kind).priority,
+                    reach: cx.reach(f.kind),
+                    side: label,
+                    own: *family,
+                    angle: a,
+                    c: f.c,
+                    s,
+                    d: g,
+                    t: travel,
+                    pt: side_code(*id) * 4 + idx,
+                })
+            };
+            for f in lines_near(cx, a, s, label) {
+                match fit(cx, &f) {
+                    Fit::Cand(c) => out.push(c),
+                    // The nearest line of this kind leaves no size: with the box some size as dragged, the next line of the kind past it, in the way the box
+                    // grows, is the nearest one that does (every line between the side and this one would have been nearer).
+                    Fit::NoSize => {
+                        let next = line_past(cx, a, f.c, label, f.kind, up);
+                        if let Some(Fit::Cand(c)) = next.map(|n| fit(cx, &n)) {
+                            out.push(c);
+                        }
                     }
-                    if deg.kind.valid(&cx.co, own.ext, g) {
-                        out.push(Cand {
-                            kind: f.kind,
-                            id: f.id,
-                            prio: cx.rule(f.kind).priority,
-                            reach: cx.reach(f.kind),
-                            side: label,
-                            own: *family,
-                            angle: a,
-                            c: f.c,
-                            s,
-                            d: g,
-                            t: travel,
-                            pt: side_code(*id) * 4 + idx,
-                        });
-                        break;
-                    }
-                    let Some(next) = line_past(cx, a, f.c, label, f.kind, up) else { break };
-                    f = next;
+                    Fit::Out => {}
                 }
             }
         }
@@ -628,5 +642,41 @@ mod tests {
         assert!(!side.valid(&co, e, f64::INFINITY) && !side.valid(&co, e, f64::NAN));
         assert!(!DegKind::Side(SideId::VMin).valid(&co, e, 10.0));
         assert!(DegKind::Half(true).valid(&co, e, -1.0) && !DegKind::Half(true).valid(&co, e, -2.0));
+    }
+    #[test]
+    fn a_degree_grows_the_box_the_way_the_sign_says_and_the_other_way_leaves_it_no_size() {
+        let co = Coincide::default();
+        let e = Ext { a0: 0.0, a1: 4.0, b0: 0.0, b1: 10.0 };
+        for (kind, sign) in [
+            (DegKind::Side(SideId::UMax), 1.0),
+            (DegKind::Side(SideId::VMax), 1.0),
+            (DegKind::Side(SideId::UMin), -1.0),
+            (DegKind::Side(SideId::VMin), -1.0),
+            (DegKind::Half(true), 1.0),
+            (DegKind::Half(false), 1.0),
+            (DegKind::Scale(0.0, 0.0), 1.0),
+        ] {
+            assert_eq!(kind.grows(), sign, "{kind:?}");
+            assert!(kind.valid(&co, e, sign * 1.0), "{kind:?}: growing is valid");
+            assert!(!kind.valid(&co, e, -sign * 100.0), "{kind:?}: shrinking far enough is not");
+        }
+    }
+
+    #[test]
+    fn the_nearest_lengths_are_the_two_beside_the_insertion_point_the_nearer_first_and_the_lower_id_on_a_tie() {
+        use crate::frame::Id;
+        use crate::index::Length;
+        // Sorted by length, then id, as the index keeps them.
+        let arr: Vec<Length> =
+            [(0.0, 7), (1.0, 3), (2.0, 4), (2.0, 5), (4.0, 9)].iter().map(|(length, id)| Length { length: *length, id: Id(*id) }).collect();
+        let near = |len: f64| nearest_lengths(&arr, len).iter().map(|l| (l.length, l.id.0)).collect::<Vec<_>>();
+        assert_eq!(near(1.2), vec![(1.0, 3), (2.0, 4)]);
+        assert_eq!(near(1.9), vec![(2.0, 4), (1.0, 3)]);
+        assert_eq!(near(2.0), vec![(2.0, 4), (1.0, 3)]);
+        assert_eq!(near(3.0), vec![(2.0, 5), (4.0, 9)], "a tie goes to the lower id");
+        assert_eq!(near(0.5), vec![(1.0, 3), (0.0, 7)], "a tie goes to the lower id");
+        assert_eq!(near(-1.0), vec![(0.0, 7)], "nothing below");
+        assert_eq!(near(9.0), vec![(4.0, 9)], "nothing above");
+        assert!(nearest_lengths(&[], 1.0).is_empty());
     }
 }
