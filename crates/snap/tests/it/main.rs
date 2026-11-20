@@ -5,6 +5,7 @@ mod each_side;
 mod gap_axes;
 mod hostile;
 mod invariant;
+mod lattice_edge;
 mod modes;
 mod moves;
 mod next_place;

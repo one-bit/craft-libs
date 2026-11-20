@@ -13,6 +13,7 @@ use crate::ctx::{Cand, Ctx, Probe, grown};
 use crate::frame::{Id, Side};
 use crate::index::{DirTable, Entry, canon, log_steps};
 use crate::kind::{Kind, Reach};
+use crate::query::Lattice;
 use crate::settings::{LineSpan, Matching};
 use crate::targets::{side_kind, side_lines};
 
@@ -215,6 +216,35 @@ fn ahead_in<'e>(cx: &Ctx<'_>, entries: &'e [Entry], s: f64, up: bool) -> Option<
     }
 }
 
+/// How many lines of a lattice are stepped past when finding the first that is ahead: the lines are only as exact as the numbers they are made of, so
+/// far from the origin the one after the first may be nearer than the same-place rule, and no more than that.
+const LATTICE_STEPS: usize = 4;
+
+/// The first line of a lattice on a page axis that is strictly ahead of the offset `s` of a side, past the same-place rule: above it when `up`, else
+/// below. Lines no farther apart than the rule are one place with the side or with each other, so none of them is ahead, and a lattice made of them
+/// has no stop. A line is only as exact as its number: the lines just coarser than the rule may be nearer than it once their positions are rounded,
+/// and they are stepped past until one is not.
+fn lattice_ahead(cx: &Ctx<'_>, lat: &Lattice, axis_x: bool, s: f64, up: bool) -> Option<f64> {
+    let (origin, pitch, o) = if axis_x { (lat.origin.x, lat.pitch.x, cx.o.x) } else { (lat.origin.y, lat.pitch.y, cx.o.y) };
+    if !(pitch.is_finite() && pitch > cx.co.tol(s, s) && origin.is_finite()) {
+        return None;
+    }
+    let n = (o + s - origin) / pitch;
+    let line = |k: f64| origin + k * pitch - o;
+    let (mut k, step) = if up { (n.floor() + 1.0, 1.0) } else { (n.ceil() - 1.0, -1.0) };
+    for _ in 0..LATTICE_STEPS {
+        if !(k.is_finite() && k.abs() <= 4_503_599_627_370_496.0) {
+            return None;
+        }
+        let c = line(k);
+        if c.is_finite() && (if up { c > s } else { c < s }) && !cx.co.same(c, s) {
+            return Some(c);
+        }
+        k += step;
+    }
+    None
+}
+
 /// The nearest line of each kind strictly ahead of the offset `s` of a side, above it when `up`, else below: for a nudge.
 pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: bool, reach: f64) -> Vec<Found> {
     let mut out = Vec::new();
@@ -224,18 +254,8 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
         if !(axis_x || axis_y) || !cx.rule(lat.kind).on || !matches(cx, lat.kind, side, None) {
             continue;
         }
-        let (origin, pitch, o) = if axis_x { (lat.origin.x, lat.pitch.x, cx.o.x) } else { (lat.origin.y, lat.pitch.y, cx.o.y) };
-        // Lines no farther apart than the same-place rule are one place with the side or with each other, so none of them is ahead of the side, and
-        // a lattice made of them has no stop.
-        if !(pitch.is_finite() && pitch > cx.co.tol(s, s) && origin.is_finite()) {
-            continue;
-        }
-        let n = (o + s - origin) / pitch;
-        let line = |k: f64| origin + k * pitch - o;
-        let first = if up { n.floor() + 1.0 } else { n.ceil() - 1.0 };
-        let k = if cx.co.same(line(first), s) { if up { first + 1.0 } else { first - 1.0 } } else { first };
-        if k.is_finite() && k.abs() <= 4_503_599_627_370_496.0 {
-            out.push(Found { kind: lat.kind, id: None, c: line(k), count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY, also: None });
+        if let Some(c) = lattice_ahead(cx, lat, axis_x, s, up) {
+            out.push(Found { kind: lat.kind, id: None, c, count: 1, lo: f64::INFINITY, hi: f64::NEG_INFINITY, also: None });
         }
     }
     let t = cx.t;
