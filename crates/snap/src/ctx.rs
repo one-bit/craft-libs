@@ -125,7 +125,7 @@ pub(crate) fn probes(lines: &[SideLine], co: &Coincide, keep: &dyn Fn(&SideLine)
 }
 
 /// A pull of one side of the subject toward a line, or toward a place across a constrained drag.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Cand {
     pub kind: Kind,
     pub id: Option<Id>,

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d74ef6e213df3d4c4a22b7b79830b8a55d729288b137f2d94bb8c1855473c497 # shrinks to boxes = [Rect { x0: 6.102786839946885, y0: 0.0, x1: 6.528496513588452, y1: 1.413275135684545 }, Rect { x0: 10.698822807251485, y0: 0.0, x1: 10.998822807251486, y1: 0.862162860201944 }, Rect { x0: 9.076371270733098, y0: 0.0, x1: 9.376371270733099, y1: 0.5734117278292532 }, Rect { x0: 9.718958858578285, y0: 0.0, x1: 10.143747448742122, y1: 1.015711853027206 }], subject = Rect { x0: 7.2207488857402335, y0: 0.0, x1: 9.116565731563838, y1: 0.5 }, nudge = 0.0

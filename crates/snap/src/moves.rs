@@ -31,6 +31,11 @@ fn keep(r: &Rounding) -> usize {
     if matches!(r, Rounding::None) { 1 } else { 8 }
 }
 
+/// How many more spacing candidates a direction keeps once a spacing candidate is among its best. A spacing candidate is read again on the geometry it
+/// lands on, where the row may be another and the gap may no longer repeat; the direction would then have nothing left to try, though another of its
+/// gaps holds there.
+const SPACING_FALLBACKS: usize = 7;
+
 /// What a constraint leaves free: the way the candidates are solved, the base move, and which axes the rounding may change.
 struct Freedom {
     free: Free,
@@ -226,10 +231,17 @@ fn solve_probes(cx: &mut Ctx<'_>, ps: &[Probe], fr: &Freedom, spaced: Option<&Tu
     let mut lists = Vec::new();
     for p in ps {
         let mut cands = probe_cands(cx, p, fr.free);
-        if let Some(f) = spaced {
-            cands.extend(crate::spacing::cands(cx, f, p, fr.free));
+        let spacing = match spaced {
+            Some(f) => crate::spacing::cands(cx, f, p, fr.free),
+            None => Vec::new(),
+        };
+        cands.extend(spacing.iter().copied());
+        let mut kept = top(cands, n, cx.s.choose, &cx.co);
+        if kept.iter().any(|c| c.kind == Kind::Spacing) {
+            let rest: Vec<Cand> = spacing.into_iter().filter(|s| !kept.contains(s)).collect();
+            kept.extend(top(rest, SPACING_FALLBACKS, cx.s.choose, &cx.co));
         }
-        lists.push(top(cands, n, cx.s.choose, &cx.co));
+        lists.push(kept);
     }
     let list = combos(&lists, ps, fr.free);
     choose(cx, list, fr, spaced.map(|f| (f, ps)), refp, minp)

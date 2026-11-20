@@ -640,6 +640,31 @@ mod beyond {
         assert_eq!((r.delta.x, spacing_hit(&r)), (0.0, None), "{:?}", r.hits);
     }
 
+    #[test]
+    fn a_gap_that_fails_where_the_subject_lands_leaves_the_neighbours_other_gaps_to_try() {
+        // From the property below, which failed on it once in a while. The middle between the neighbours (0.0479 away) is a place where another box
+        // becomes the neighbour, so it is dropped when it is read again there; the gap of the high neighbour to the box beyond it (0.0498 the other way)
+        // holds, and is what the rule written out asks for. The crate used to keep only the nearest candidate of the direction and so had nothing to try.
+        let r4 = |x: f64, y: f64, w: f64, h: f64| Rect::new(x, y, x + w, y + h);
+        let boxes = [
+            r4(9.133484291898712, 0.7741148520080406, 0.9707174529557605, 0.20000000000000007),
+            r4(5.160760281496745, 0.0, 1.6290643702856897, 0.9141254572049335),
+            r4(11.164832549934763, 0.0, 0.3000000000000007, 1.1501505008391264),
+            r4(5.184633889740058, 0.0, 0.6893326820905292, 1.564771442712707),
+        ];
+        let subject = r4(6.789047921389958, 0.0, 1.3336490751376804, 1.1690145435144503);
+        let want = expected(&boxes, subject, 96.0);
+        assert!((want + 0.0498).abs() < 1e-4, "the rule asks for {want}");
+        let frames: Vec<TurnedBox> = boxes.iter().map(|r| bx(r.x0, r.y0, r.x1, r.y1)).collect();
+        for row in [SpacingRow::Beyond, SpacingRow::Band, SpacingRow::Linked] {
+            let r = along_x(&frames, bx(subject.x0, subject.y0, subject.x1, subject.y1), row);
+            if row == SpacingRow::Beyond {
+                assert!((r.delta.x - want).abs() < 1e-9, "want {want}, got {:?} {:?}", r.delta, r.hits);
+                assert_eq!(spacing_hit(&r), Some(Id(1)), "{:?}", r.hits);
+            }
+        }
+    }
+
     /// The moves of the subject, along x, that the rule asks for (the middle between the neighbours, and each neighbour's gap repeated to the object
     /// wholly beyond it), written out over the boxes that meet the strip as wide across as the subject and four lengths (or four inches) along.
     fn asked(boxes: &[Rect], subject: Rect) -> Vec<f64> {
@@ -695,8 +720,19 @@ mod beyond {
         (0.0f64..14.0, -0.5f64..2.0, 0.3f64..2.0, 0.2f64..1.6).prop_map(|(x, y, w, h)| Rect::new(x, y, x + w, y + h))
     }
 
+    /// A fixed seed, so that a run is the same run each time; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and each find is a case to
+    /// read (and to pin as a named test).
+    fn config() -> ProptestConfig {
+        let number = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(default);
+        ProptestConfig {
+            cases: u32::try_from(number("CRAFT_SNAP_CASES", 4000)).unwrap_or(4000),
+            rng_seed: proptest::test_runner::RngSeed::Fixed(number("CRAFT_SNAP_SEED", 0xbe_704d)),
+            ..ProptestConfig::default()
+        }
+    }
+
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(4000))]
+        #![proptest_config(config())]
 
         /// The row of this mode lands the subject where the rule written out above does, over boxes of every kind of overlap across and along.
         #[test]
