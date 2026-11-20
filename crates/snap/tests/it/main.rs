@@ -7,6 +7,7 @@ mod hostile;
 mod invariant;
 mod modes;
 mod moves;
+mod next_place;
 mod oracle;
 mod round2;
 mod spacing;

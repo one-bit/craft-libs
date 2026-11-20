@@ -192,13 +192,18 @@ pub(crate) fn best_of(cands: &[Cand], choose: Choose, co: &Coincide) -> Option<u
 }
 
 /// The best `keep` candidates, best first.
-pub(crate) fn top(mut cands: Vec<Cand>, keep: usize, choose: Choose, co: &Coincide) -> Vec<Cand> {
+pub(crate) fn top(cands: Vec<Cand>, keep: usize, choose: Choose, co: &Coincide) -> Vec<Cand> {
+    split_top(cands, keep, choose, co).0
+}
+
+/// The best `keep` candidates, best first, and the others (in no order).
+pub(crate) fn split_top(mut cands: Vec<Cand>, keep: usize, choose: Choose, co: &Coincide) -> (Vec<Cand>, Vec<Cand>) {
     let mut out = Vec::new();
     while out.len() < keep {
         let Some(i) = best_of(&cands, choose, co) else { break };
         out.push(cands.swap_remove(i));
     }
-    out
+    (out, cands)
 }
 
 /// The bounds of some places grown by `d`.

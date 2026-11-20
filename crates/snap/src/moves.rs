@@ -17,7 +17,7 @@ use kurbo::{Point, Vec2};
 
 use crate::align::{Free, probe_cands};
 use crate::budget::{Cuts, Work};
-use crate::ctx::{Cand, Ctx, Probe, ProbeSide, probes, top};
+use crate::ctx::{Cand, Ctx, Probe, ProbeSide, probes, split_top, top};
 use crate::frame::{Anchors, OwnOrBounds, Side, TurnedBox, to_page_axes};
 use crate::kind::Kind;
 use crate::places::{PlaceCand, Travel, Way, box_places, solve_places};
@@ -31,10 +31,11 @@ fn keep(r: &Rounding) -> usize {
     if matches!(r, Rounding::None) { 1 } else { 8 }
 }
 
-/// How many more spacing candidates a direction keeps once a spacing candidate is among its best. A spacing candidate is read again on the geometry it
-/// lands on, where the row may be another and the gap may no longer repeat; the direction would then have nothing left to try, though another of its
-/// gaps holds there. They stand in for the kept one as single-degree combinations only: a pair is made of the candidates each direction kept.
-const SPACING_FALLBACKS: usize = 7;
+/// How many more candidates a direction keeps behind its best once a spacing candidate is among its best. A spacing candidate is read again on the geometry
+/// it lands on, where the row may be another and the gap may no longer repeat; the direction would then have nothing left to try, though a line or another
+/// of its gaps holds there. They stand in for the kept one: alone, and, when the kept one fails where the subject lands, paired with what the other
+/// directions kept.
+const FALLBACKS: usize = 7;
 
 /// What a constraint leaves free: the way the candidates are solved, the base move, and which axes the rounding may change.
 struct Freedom {
@@ -63,6 +64,10 @@ struct Combo {
     k: Vec2,
     a: Cand,
     b: Option<Cand>,
+    /// 0 for a combination of what the directions kept, 1 once a fallback is in it: of two that are as good, the first is tried first.
+    tier: u8,
+    /// The directions (their places among the probes) of `a` and of `b`.
+    dirs: (usize, usize),
 }
 
 impl Combo {
@@ -89,16 +94,28 @@ fn pair_k(a: &Cand, b: &Cand, na: Vec2, nb: Vec2) -> Option<Vec2> {
     k.is_finite().then_some(k)
 }
 
+/// A pair of candidates in two directions that are not parallel, as a combination: within the larger reach; and where both kinds have none, within a few
+/// times the farther of the two pulls (a pair of directions nearly parallel throws the box without end).
+fn pair_combo(a: &Cand, b: &Cand, (i, j): (usize, usize), probes: &[Probe], tier: u8) -> Option<Combo> {
+    let (pa, pb) = (probes.get(i)?, probes.get(j)?);
+    let k = pair_k(a, b, pa.normal, pb.normal)?;
+    let reach = a.reach.max(b.reach);
+    let limit = if reach.is_finite() { reach } else { crate::ctx::MAX_AMPLIFICATION * a.t.max(b.t) };
+    (k.hypot() <= limit).then_some(Combo { degrees: 2, k, a: *a, b: Some(*b), tier, dirs: (i, j) })
+}
+
 fn combos(lists: &[Vec<Cand>], spares: &[Vec<Cand>], probes: &[Probe], free: Free) -> Vec<Combo> {
     let mut out = Vec::new();
     for (i, (list, spare)) in lists.iter().zip(spares).enumerate() {
         let Some(pi) = probes.get(i) else { continue };
-        for a in list.iter().chain(spare) {
-            let k = match free {
-                Free::Normal => pi.normal * a.d,
-                Free::Along(e) => e * a.d,
-            };
-            out.push(Combo { degrees: 1, k, a: *a, b: None });
+        for (tier, cands) in [(0, list), (1, spare)] {
+            for a in cands {
+                let k = match free {
+                    Free::Normal => pi.normal * a.d,
+                    Free::Along(e) => e * a.d,
+                };
+                out.push(Combo { degrees: 1, k, a: *a, b: None, tier, dirs: (i, i) });
+            }
         }
     }
     if !matches!(free, Free::Normal) {
@@ -106,17 +123,9 @@ fn combos(lists: &[Vec<Cand>], spares: &[Vec<Cand>], probes: &[Probe], free: Fre
     }
     for (i, la) in lists.iter().enumerate() {
         for (j, lb) in lists.iter().enumerate().skip(i + 1) {
-            let (Some(pa), Some(pb)) = (probes.get(i), probes.get(j)) else { continue };
             for a in la {
                 for b in lb {
-                    let Some(k) = pair_k(a, b, pa.normal, pb.normal) else { continue };
-                    // Within the larger reach; and where both kinds have none, within a few times the farther of the two pulls (a pair of directions nearly
-                    // parallel throws the box without end).
-                    let reach = a.reach.max(b.reach);
-                    let limit = if reach.is_finite() { reach } else { crate::ctx::MAX_AMPLIFICATION * a.t.max(b.t) };
-                    if k.hypot() <= limit {
-                        out.push(Combo { degrees: 2, k, a: *a, b: Some(*b) });
-                    }
+                    out.extend(pair_combo(a, b, (i, j), probes, 0));
                 }
             }
         }
@@ -133,7 +142,7 @@ fn combo_order(x: &Combo, y: &Combo, choose: Choose, co: &crate::frame::Coincide
         Choose::Ranked => prio.then(by_len),
     };
     let ids = |c: &Combo| (c.a.id, c.a.side, c.a.kind, c.b.and_then(|b| b.id));
-    y.degrees.cmp(&x.degrees).then(rule).then(ids(x).cmp(&ids(y))).then(x.len().total_cmp(&y.len()))
+    y.degrees.cmp(&x.degrees).then(rule).then(x.tier.cmp(&y.tier)).then(ids(x).cmp(&ids(y))).then(x.len().total_cmp(&y.len()))
 }
 
 fn best_combo(list: &[Combo], choose: Choose, co: &crate::frame::Coincide) -> Option<usize> {
@@ -159,17 +168,53 @@ fn spacing_holds(cx: &mut Ctx<'_>, c: &Cand, spaced: Option<(&TurnedBox, &[Probe
     crate::spacing::still_holds(cx, &TurnedBox { centre: frame.centre + k, ..*frame }, probe)
 }
 
-/// Chooses the combination, applies the rounding, and checks that every candidate it names still holds; if not, the next.
+/// The candidates each direction offers: the ones it kept, and the fallbacks behind them, best first.
+struct Pool<'a> {
+    probes: &'a [Probe],
+    free: Free,
+    lists: Vec<Vec<Cand>>,
+    spares: Vec<Vec<Cand>>,
+}
+
+impl Pool<'_> {
+    /// When `failed`, a candidate of direction `dir`, is the last the direction has offered and it has a fallback behind it, the fallback is offered
+    /// too, and the combinations it makes with what the other directions offer are returned: a candidate that fails where the subject lands is
+    /// replaced by the next one in reach, in the pairs it was in as in the single. (Pairs of fallbacks are not made before one has failed: a
+    /// direction's other candidates are never offered beside the ones the directions kept, or they would take a result from them.)
+    fn promote(&mut self, dir: usize, failed: &Cand) -> Vec<Combo> {
+        if !matches!(self.free, Free::Normal) {
+            return Vec::new();
+        }
+        let (Some(list), Some(spare)) = (self.lists.get_mut(dir), self.spares.get_mut(dir)) else { return Vec::new() };
+        if list.last() != Some(failed) || spare.is_empty() {
+            return Vec::new();
+        }
+        let next = spare.remove(0);
+        list.push(next);
+        let mut out = Vec::new();
+        for (j, others) in self.lists.iter().enumerate().filter(|(j, _)| *j != dir) {
+            for b in others {
+                out.extend(if j < dir { pair_combo(b, &next, (j, dir), self.probes, 1) } else { pair_combo(&next, b, (dir, j), self.probes, 1) });
+            }
+        }
+        out
+    }
+}
+
+/// Chooses the combination, applies the rounding, and checks that every candidate it names still holds; if not, the next. A candidate that fails
+/// where the subject lands is replaced by the next of its direction.
 fn choose(
     cx: &mut Ctx<'_>,
     list: Vec<Combo>,
+    pool: &mut Pool<'_>,
     fr: &Freedom,
-    spaced: Option<(&TurnedBox, &[Probe])>,
+    spaced: Option<&TurnedBox>,
     refp: Point,
     minp: Point,
 ) -> Option<(Vec2, Combo)> {
     let mut list = list;
     let cap = u64::from(cx.budget().solves);
+    let spaced = spaced.map(|f| (f, pool.probes));
     loop {
         let i = best_combo(&list, cx.s.choose, &cx.co)?;
         if !Work::charge(&mut cx.work.solves, cap, 1, &mut cx.work.cut, &mut cx.work.truncated, Cuts::SOLVES) {
@@ -178,9 +223,11 @@ fn choose(
         let combo = list.swap_remove(i);
         let k = fr.base + combo.k;
         let k = round_k(&cx.q.rounding, refp, minp, k, fr.on);
-        let ok = [Some(combo.a), combo.b].into_iter().flatten().all(|c| holds(cx, &c, k - fr.base) && spacing_holds(cx, &c, spaced, k - fr.base));
-        if ok {
-            return Some((k, combo));
+        let named = [Some((combo.a, combo.dirs.0)), combo.b.map(|b| (b, combo.dirs.1))];
+        let failed = named.into_iter().flatten().find(|(c, _)| !(holds(cx, c, k - fr.base) && spacing_holds(cx, c, spaced, k - fr.base)));
+        match failed {
+            None => return Some((k, combo)),
+            Some((c, dir)) => list.extend(pool.promote(dir, &c)),
         }
     }
 }
@@ -232,23 +279,19 @@ fn solve_probes(cx: &mut Ctx<'_>, ps: &[Probe], fr: &Freedom, spaced: Option<&Tu
     let mut spares = Vec::new();
     for p in ps {
         let mut cands = probe_cands(cx, p, fr.free);
-        let spacing = match spaced {
-            Some(f) => crate::spacing::cands(cx, f, p, fr.free),
-            None => Vec::new(),
-        };
-        cands.extend(spacing.iter().copied());
-        let kept = top(cands, n, cx.s.choose, &cx.co);
-        let spare = if kept.iter().any(|c| c.kind == Kind::Spacing) {
-            let rest: Vec<Cand> = spacing.into_iter().filter(|s| !kept.contains(s)).collect();
-            top(rest, SPACING_FALLBACKS, cx.s.choose, &cx.co)
-        } else {
-            Vec::new()
-        };
+        if let Some(f) = spaced {
+            cands.extend(crate::spacing::cands(cx, f, p, fr.free));
+        }
+        let (kept, rest) = split_top(cands, n, cx.s.choose, &cx.co);
+        // Where a spacing candidate is among the best, the next candidates of the direction stand behind it, whatever they are: it may fail where the
+        // subject lands.
+        let spare = if kept.iter().any(|c| c.kind == Kind::Spacing) { top(rest, FALLBACKS, cx.s.choose, &cx.co) } else { Vec::new() };
         lists.push(kept);
         spares.push(spare);
     }
     let list = combos(&lists, &spares, ps, fr.free);
-    choose(cx, list, fr, spaced.map(|f| (f, ps)), refp, minp)
+    let mut pool = Pool { probes: ps, free: fr.free, lists, spares };
+    choose(cx, list, &mut pool, fr, spaced, refp, minp)
 }
 
 /// What a move settled on: lines, or a place.

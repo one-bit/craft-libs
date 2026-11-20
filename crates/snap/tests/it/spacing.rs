@@ -518,11 +518,13 @@ fn a_chained_row_reads_the_boxes_after_the_subject_wherever_the_origin_of_the_ta
     assert!(r.hits.iter().any(|h| h.kind == Kind::Spacing) && (r.frame.unwrap().centre.x - 52.0).abs() < 1e-9, "{:?} {:?}", r.hits, r.frame);
 }
 
-/// A kept equal-gap candidate has fallbacks, but they are only singles: they stand in for it when it fails where the subject lands, and they are not paired
-/// with a line in the other direction as the kept one could not be. From a random default query that the fallbacks changed: the subject at x 2.75 to 6.25,
-/// y 1.75 to 3.25, five boxes, and the box on its right (id 103) offers a corner and a gap, and the pair of that gap's repeat and an edge below.
+/// A kept equal-gap candidate has fallbacks, and they are tried when it fails where the subject lands: alone, and paired with what the other directions
+/// kept, as the kept one was. From a random default query: the subject at x 2.75 to 6.25, y 1.75 to 3.25, five boxes, and the box on its right (id 103)
+/// offers a corner and a gap. The gap that was nearest does not repeat where the subject lands, so with the pair of it and an edge below lost, the
+/// subject went to the corner 0.67 away; the next gap of that row, paired with the edge below, holds there and is 0.22 away, and a pair of lines
+/// that holds and is nearer than a place by more than the place's bias beats it.
 #[test]
-fn the_fallbacks_of_an_equal_gap_do_not_make_a_pair_the_kept_candidate_could_not() {
+fn a_gap_that_fails_where_the_subject_lands_is_replaced_by_the_next_in_the_pairs_it_was_in() {
     use craft_snap::{Object, Parts, TargetsBuilder, TurnedBox};
     use kurbo::Rect;
     let mut b = TargetsBuilder::new(craft_snap::Limits::default());
@@ -546,10 +548,13 @@ fn the_fallbacks_of_an_equal_gap_do_not_make_a_pair_the_kept_candidate_could_not
     let q = craft_snap::Query { zoom: 8.0, ..query(box_subject(frame(4.5, 2.5, 3.5, 1.5, 0.0)), &s) };
     let r = run(&t, &q);
     r.check(&t, &q).unwrap();
-    // The corner of the box on its right, as before the fallbacks: one place, no gap.
-    assert_eq!((r.delta.x, r.delta.y), (0.625, -0.25), "{:?} {:?}", r.delta, r.hits);
-    assert_eq!(r.hits.len(), 1);
-    assert_eq!((r.hits[0].kind, r.hits[0].id), (Kind::Corner, Some(craft_snap::Id(103))));
+    // The gap of box 103's row on x, and the edge of box 112 on y.
+    assert!((r.delta.x + 0.2220405557572942).abs() < 1e-12 && (r.delta.y + 0.03629052879619277).abs() < 1e-12, "{:?} {:?}", r.delta, r.hits);
+    let kinds: Vec<_> = r.hits.iter().map(|h| (h.kind, h.id, h.direction.map(|d| d.angle()))).collect();
+    assert_eq!(
+        kinds,
+        vec![(Kind::Spacing, Some(craft_snap::Id(103)), Some(0.0)), (Kind::Edge, Some(craft_snap::Id(112)), Some(std::f64::consts::FRAC_PI_2))]
+    );
 }
 
 /// The row of an app that reads equal gaps from a strip (`SpacingRow::Beyond`): the neighbour on each side and the nearest object wholly beyond it.
