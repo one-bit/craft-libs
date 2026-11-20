@@ -83,4 +83,37 @@ mod gap_marks_of_two_axes {
             assert_eq!(gaps_of(&r), vec![(0.0, 6.0, true), (0.0, 6.0, true)], "{row:?}");
         }
     }
+    #[test]
+    fn the_gaps_of_a_row_are_a_hit_only_when_that_rows_direction_repeated_a_gap() {
+        // The cross again, with a guide across y at 14 that the ranking prefers to the gap in y: the subject's high side goes to it, 0.2 up, which is also
+        // where the gaps above and below it are equal (6 and 6). Only x repeated a gap. Every equal gap the final box lies on is marked, and the x gaps say
+        // they were hit while the y gaps, which a guide put there, say they were not.
+        let (_, subject) = cross();
+        let boxes = [
+            (1, Rect::new(0.0, 9.0, 4.0, 15.0)),
+            (2, Rect::new(20.0, 9.0, 24.0, 15.0)),
+            (3, Rect::new(9.0, 0.0, 15.0, 4.0)),
+            (4, Rect::new(9.0, 20.0, 15.0, 24.0)),
+        ];
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        for (id, r) in boxes {
+            b.object(craft_snap::Id(id), craft_snap::Object { frame: rect_box(r), bounds: Some(r), angle: Some(0.0), parts: craft_snap::Parts::ALL })
+                .unwrap();
+        }
+        b.line(None, craft_snap::Axis::Y, 14.0, None, Kind::Guide).unwrap();
+        let t = b.build();
+        for row in [SpacingRow::Band, SpacingRow::Linked, SpacingRow::Beyond] {
+            let mut s = settings(row, MarkRule::Coincident);
+            s.kinds.set(Kind::Guide, craft_snap::KindRule { on: true, reach: Reach::Screen(2.0), priority: 1, scope: craft_snap::Scope::All });
+            let q = Query { zoom: 1.0, ..query(box_subject(rect_box(subject)), &s) };
+            let r = run(&t, &q);
+            r.check(&t, &q).unwrap_or_else(|b| panic!("{row:?}: {b:?}\n{r:?}"));
+            assert!((r.delta.x + 0.3).abs() < 1e-9 && (r.delta.y + 0.2).abs() < 1e-9, "{row:?}: {:?} {:?}", r.delta, r.hits);
+            let kinds: Vec<Kind> = r.hits.iter().map(|h| h.kind).collect();
+            assert_eq!(kinds.iter().filter(|k| **k == Kind::Spacing).count(), 1, "{row:?}: {kinds:?}");
+            assert!(kinds.contains(&Kind::Guide), "{row:?}: {kinds:?}");
+            let quarter = std::f64::consts::FRAC_PI_2;
+            assert_eq!(gaps_of(&r), vec![(0.0, 6.0, true), (0.0, 6.0, true), (quarter, 6.0, false), (quarter, 6.0, false)], "{row:?}");
+        }
+    }
 }

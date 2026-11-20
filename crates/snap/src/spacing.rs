@@ -416,7 +416,8 @@ pub(crate) fn gap_marks(cx: &mut Ctx<'_>, sol: &Solution, frame: &TurnedBox, pro
     recs.extend(mine);
     recs.retain(|g| values.iter().any(|v| co.same(*v, g.value)));
     recs.sort_by(|x, y| x.from.total_cmp(&y.from).then(x.to.total_cmp(&y.to)));
-    let hit = sol.hits.iter().any(|h| matches!(h, HitRec::Line(c) if c.kind == Kind::Spacing));
+    // The gaps of a row are a hit when the move repeated a gap in this row's direction, and not when another direction had one.
+    let hit = snapped.is_some();
     let direction = Direction::new(probe.angle);
     let t = Vec2::new(-probe.normal.y, probe.normal.x);
     let mut out = Vec::new();
