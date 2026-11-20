@@ -871,6 +871,69 @@ mod finer_rules {
         assert_eq!(fires(&t, &q, set_id(8)), want, "no such object");
     }
 
+    /// A detail source that gives one place for object 7: the point (9, 9), of the app's kind 1, numbered 4.
+    struct Pin;
+
+    impl craft_snap::Detail for Pin {
+        fn points(&mut self, id: Id, _spend: &mut craft_snap::Spend<'_>, out: &mut Vec<(Point, Kind, u32)>) {
+            if id == Id(7) {
+                out.push((Point::new(9.0, 9.0), Kind::Point(1), 4));
+            }
+        }
+        fn outline(&mut self, _id: Id, _spend: &mut craft_snap::Spend<'_>, _out: &mut Vec<kurbo::BezPath>) {}
+    }
+
+    #[test]
+    fn a_place_mark_naming_an_object_with_detail_is_asked_of_the_detail_source() {
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        let parts = craft_snap::Parts { detail: true, ..craft_snap::Parts::NONE };
+        b.object(Id(7), craft_snap::Object { parts, ..object(frame(9.0, 9.0, 1.0, 1.0, 0.0)) }).unwrap();
+        let t = b.build();
+        let s = Settings::default();
+        // A box whose top right corner is 0.42 from the source's place: it is pulled on to it.
+        let q = query(box_subject(frame(8.3, 8.3, 2.0, 2.0, 0.0)), &s);
+        let r = craft_snap::snap(&t, &q, &mut Pin);
+        assert_eq!((r.hits.len(), r.hits[0].kind, r.hits[0].number), (1, Kind::Point(1), Some(4)), "{r:?}");
+        assert_eq!(r.check_with_detail(&t, &q, &mut Pin), Ok(()), "the true mark passes, asked of the source");
+        assert_eq!(r.check(&t, &q), Ok(()));
+        // Three marks that are wrong, at the corner the box landed on: another number, another kind and no number, and the right number of the wrong kind.
+        let corner = Point::new(9.0, 9.0);
+        let want = "a place mark names a place that is not in the set";
+        for (kind, number, hit) in [(Kind::Point(1), Some(999), false), (Kind::Point(3), None, false), (Kind::Point(0), Some(4), true)] {
+            let mut forged = r.clone();
+            forged.marks.push(Mark::Place { at: corner, kind, id: Some(Id(7)), number, hit });
+            assert_eq!(forged.check_with_detail(&t, &q, &mut Pin).err().map(|e| e.rule), Some(want), "{kind:?} {number:?}");
+            // Without the source the check cannot tell, and takes an object that can give places for what it says.
+            assert_eq!(forged.check(&t, &q), Ok(()), "{kind:?} {number:?}: the plain check does not read the source");
+        }
+        // A mark at a place the source does not have at all (the right kind and number, 1 off), and one naming an object that gives nothing.
+        for (at, id) in [(Point::new(9.0, 9.0 + 1.0e-3), 7), (corner, 8)] {
+            let mut forged = r.clone();
+            forged.marks.push(Mark::Place { at, kind: Kind::Point(1), id: Some(Id(id)), number: Some(4), hit: false });
+            assert!(forged.check_with_detail(&t, &q, &mut Pin).is_err(), "{at:?} {id}");
+        }
+        // The source is asked about the object the mark names and no other, and a mark for a place of the builder is not asked of it at all.
+        struct Counting(u32);
+        impl craft_snap::Detail for Counting {
+            fn points(&mut self, id: Id, spend: &mut craft_snap::Spend<'_>, out: &mut Vec<(Point, Kind, u32)>) {
+                self.0 += 1;
+                Pin.points(id, spend, out);
+            }
+            fn outline(&mut self, _id: Id, _spend: &mut craft_snap::Spend<'_>, _out: &mut Vec<kurbo::BezPath>) {}
+        }
+        let mut asked = Counting(0);
+        assert_eq!(r.check_with_detail(&t, &q, &mut asked), Ok(()));
+        assert_eq!(asked.0, 1, "once, for the one mark that names an object with detail");
+        let mut b = craft_snap::TargetsBuilder::new(craft_snap::Limits::default());
+        b.point(Some(Id(9)), Point::new(50.0, 50.0), Kind::Point(0), 3).unwrap();
+        let t2 = b.build();
+        let q2 = query(Subject::Point { at: Point::new(50.5, 50.5), base: None }, &s);
+        let r2 = craft_snap::snap(&t2, &q2, &mut Pin);
+        let mut asked = Counting(0);
+        assert_eq!(r2.check_with_detail(&t2, &q2, &mut asked), Ok(()));
+        assert_eq!(asked.0, 0);
+    }
+
     #[test]
     fn a_gap_is_more_than_nothing_and_its_ends_are_on_boxes_that_cover_the_mark_across() {
         // A gap of no length between two boxes that touch is no gap.

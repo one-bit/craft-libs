@@ -7,10 +7,11 @@ use std::f64::consts::PI;
 
 use kurbo::{Point, Vec2};
 
+use crate::budget::Work;
 use crate::frame::{Axis, Coincide, unit};
 use crate::index::canon;
 use crate::kind::Kind;
-use crate::query::{About, Constraint, Query, Rounding, Subject};
+use crate::query::{About, Constraint, Detail, Query, Rounding, Subject};
 use crate::result::{Broken, Mark, Snapped};
 use crate::targets::{SideLine, Targets, side_kind, side_lines};
 
@@ -688,8 +689,17 @@ fn resized(snapped: &Snapped, q: &Query<'_>, t: &Targets) -> Result<(), Broken> 
     Ok(())
 }
 
-/// A place mark: a place of the final geometry is on it, and a place of the kinds the set holds itself is in the set.
-fn place_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result<(), Broken> {
+/// Whether the detail source gives `id` a place of this kind and number at `at`.
+fn source_gives(q: &Query<'_>, detail: &mut dyn Detail, id: crate::frame::Id, kind: Kind, number: Option<u32>, at: Point) -> bool {
+    let mut work = Work::default();
+    let mut given = Vec::new();
+    detail.points(id, &mut crate::budget::Spend { work: &mut work, budget: &q.budget }, &mut given);
+    given.iter().any(|(p, k, n)| *k == kind && Some(*n) == number && q.settings.coincide.same_point(*p, at))
+}
+
+/// A place mark: a place of the final geometry is on it, and a place of the kinds the set holds itself is in the set. One of the app's kinds that names
+/// an object with detail is one the detail source gives, when the check has the source, and the object's word otherwise.
+fn place_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark, detail: Option<&mut dyn Detail>) -> Result<(), Broken> {
     let Mark::Place { at, kind, id, number, .. } = m else { return Ok(()) };
     let co = &q.settings.coincide;
     let finals: Vec<Point> = match (q.subject, snapped.point, snapped.frame) {
@@ -702,10 +712,13 @@ fn place_mark(t: &Targets, q: &Query<'_>, snapped: &Snapped, m: &Mark) -> Result
         return broken("a place mark is not on a place of the final geometry", m);
     }
     let exists = match kind {
-        // A place of the app's kinds is one the builder holds, or one the detail source gives for an object that can (which the check cannot read).
+        // A place of the app's kinds is one the builder holds, or one the detail source gives for an object that can: the source is asked when the
+        // check has it, and an object that can give places is taken for what it says when the check has not.
         Kind::Point(_) => {
             t.points.iter().any(|p| p.kind == *kind && p.id == *id && Some(p.number) == *number && co.same_point(p.at, *at))
-                || id.is_some_and(|i| t.objects.iter().any(|o| o.id == i && o.parts.detail))
+                || id.is_some_and(|i| {
+                    t.objects.iter().any(|o| o.id == i && o.parts.detail) && detail.is_none_or(|d| source_gives(q, d, i, *kind, *number, *at))
+                })
         }
         Kind::Corner | Kind::SideMiddle => t.objects.iter().any(|o| {
             let c = o.frame.corners();
@@ -778,14 +791,28 @@ impl Snapped {
     /// Checks both ways that every mark is true. It must hold on the final geometry, the constraint and the rounding, and the target it names
     /// must be in the set: a line of those kinds there, the row's objects at a gap's ends, an object of that length or angle, a place there.
     /// This is what the tests assert.
+    ///
+    /// The check cannot read the detail source: a place mark that names an object whose parts include detail is taken on trust, whatever number
+    /// and kind it carries, because that object may have given it. [`Snapped::check_with_detail`] asks the source.
     pub fn check(&self, targets: &Targets, query: &Query<'_>) -> Result<(), Broken> {
+        self.check_reading(targets, query, None)
+    }
+
+    /// As [`Snapped::check`], with the detail source the query was made with: a place mark of the app's kinds that names an object with detail must be
+    /// one of the places the source gives for that object (its kind, its number and where it is), asked once for each such mark. The source is read
+    /// under the query's own budget, with no work counted before it.
+    pub fn check_with_detail(&self, targets: &Targets, query: &Query<'_>, detail: &mut dyn Detail) -> Result<(), Broken> {
+        self.check_reading(targets, query, Some(detail))
+    }
+
+    fn check_reading(&self, targets: &Targets, query: &Query<'_>, detail: Option<&mut dyn Detail>) -> Result<(), Broken> {
         // Far from the origin the geometry the result carries is only as exact as the numbers there: the same-place rule is widened by what a
         // number of that size cannot say, so a result is not called false for the rounding of its own coordinates.
         let far = self.far(targets, query);
         let mut settings = query.settings.clone();
         settings.coincide = settings.coincide.at(far);
         let widened = Query { settings: &settings, ..query.clone() };
-        self.check_with(targets, &widened)
+        self.check_with(targets, &widened, detail)
     }
 
     /// The largest coordinate of the subject, the final geometry and the targets' origin.
@@ -795,7 +822,7 @@ impl Snapped {
         query.subject.far().max(self.frame.as_ref().map_or(0.0, frame)).max(self.point.map_or(0.0, big)).max(big(targets.origin))
     }
 
-    fn check_with(&self, targets: &Targets, query: &Query<'_>) -> Result<(), Broken> {
+    fn check_with(&self, targets: &Targets, query: &Query<'_>, mut detail: Option<&mut dyn Detail>) -> Result<(), Broken> {
         if self.work.refused.is_some() {
             return if self.delta == Vec2::ZERO && self.marks.is_empty() { Ok(()) } else { broken("a refused query moved the subject", self.delta) };
         }
@@ -814,7 +841,11 @@ impl Snapped {
             size_mark(targets, query, self, m)?;
             angle_mark(targets, query, self, m)?;
             gap_mark(targets, query, self, m)?;
-            place_mark(targets, query, self, m)?;
+            let asked: Option<&mut dyn Detail> = match detail.as_mut() {
+                Some(d) => Some(&mut **d),
+                None => None,
+            };
+            place_mark(targets, query, self, m, asked)?;
         }
         if self.work.marks_dropped != 0 {
             return broken("marks were dropped", self.work.marks_dropped);

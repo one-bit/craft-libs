@@ -232,7 +232,7 @@ mod held_move {
         }
         let q = Query { constraint: Constraint::Axis(Axis::X), ..query(box_subject(frame(0.0, 10.0, 4.0, 6.0, 0.0)), &s) };
         let r = craft_snap::snap(&t, &q, &mut Pins);
-        r.check(&t, &q).unwrap();
+        r.check_with_detail(&t, &q, &mut Pins).unwrap();
         assert_eq!((r.delta.x, r.hits[0].number), (3.5, Some(4)), "the pin on the box's middle line is 3.5 from its right middle: {r:?}");
         assert!(r.work.outlines >= 1);
     }
@@ -566,7 +566,7 @@ mod nudge {
             &s,
         );
         let r = craft_snap::snap(&t, &q, &mut Pins);
-        r.check(&t, &q).unwrap();
+        r.check_with_detail(&t, &q, &mut Pins).unwrap();
         assert_eq!((r.delta.x, r.hits[0].number), (3.5, Some(4)), "{r:?}");
         // Two outlines cross at (6, 5): the box's right middle (2, 5) is 4 from it.
         let mut b = TargetsBuilder::new(Limits::default());
