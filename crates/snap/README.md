@@ -24,7 +24,9 @@ rest, and what to draw about it. It depends on `kurbo` and nothing else at run t
   candidate of its direction (a line, or another gap) stands in for it, alone and in the pairs it was in; a pair that is made of such a candidate
   is made only after one has failed, so a query where every candidate holds is as it would be without them. A resize does not offer a line, or a
   width or height, that would leave the box no size (collapse it, or turn it inside out): it offers the next line of that kind in the way the box
-  grows, or the next length, in reach. A resize under a rounding rounds the point that leads the drag: the middle of a
+  grows, or the next length, in reach. For a kind that pulls from any distance (a grid) the reach is the distance that first line pulled from: a next
+  line farther than that is not offered, so the side does not jump past the nearer lines of other kinds, and the side stays where it was dragged when
+  no other kind is in reach. A resize under a rounding rounds the point that leads the drag: the middle of a
   dragged side, or, with the proportions kept, the dragged corner. The leading point lands on the lattice along the page axis it moves along most,
   and the other coordinate follows the drag (or the ratio). This holds for a turned box as for one square to the page. A rounding that would
   collapse or flip the box is not made. The ratio of a kept aspect is the ratio the result has, not
@@ -209,7 +211,7 @@ the directions and the pairing of up to four of them; the constraint solver; the
   for a side or a proportional corner in an oriented box; here the same parameters are degrees of a general solve (a side, a half-size, a scale
   about a fixed point), a size match is a degree's candidate too, and a candidate that does not hold on the final extents is dropped. Its `snap_scale`
   refuses a scale that would collapse the box and tries nothing next; here a line (or a width or height) that would leave the box no size is
-  passed over for the next one of its kind in reach.
+  passed over for the next one of its kind in reach (for a kind that pulls from any distance, no farther than the first line was).
 - **DesignCraft** passes in order and the first hit wins; here the settings choose. Its size match reads every item; here the lengths are in
   sorted arrays (or in a `ViewIndex`). Its rotation tolerance is the same, `atan(zone / radius)`.
 - **EffectCraft's** place pulled as a line across a locked drag is not ported as a line: a place pulls a held move only where the subject can land
