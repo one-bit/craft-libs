@@ -265,31 +265,45 @@ mod resize_past_a_collapse {
         assert_eq!(hit_kinds(&r), vec![(Kind::Size, Some(2), None)]);
     }
 
+    /// A fixed seed, so that a run is the same run each time; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and each find is a case to read.
     fn config() -> ProptestConfig {
-        ProptestConfig { cases: 600, rng_seed: proptest::test_runner::RngSeed::Fixed(0x2025), ..ProptestConfig::default() }
+        let number = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(default);
+        ProptestConfig {
+            cases: u32::try_from(number("CRAFT_SNAP_CASES", 600)).unwrap_or(600),
+            rng_seed: proptest::test_runner::RngSeed::Fixed(number("CRAFT_SNAP_SEED", 0x2025)),
+            ..ProptestConfig::default()
+        }
     }
 
     proptest! {
         #![proptest_config(config())]
 
-        /// Against the rule written out: the right side lands on the nearest guide within reach that leaves the box a width (two as near are both right),
-        /// and stays where it was dragged when there is none.
+        /// Against the rule written out: the right side lands on the nearest line in reach (a guide from 6 screen units, a layout line from 9) that leaves
+        /// the box a width (two as near are both right), and stays where it was dragged when there is none.
         #[test]
-        fn the_right_side_goes_to_the_nearest_guide_in_reach_that_leaves_a_width(
-            at in prop::collection::vec(80i32..140, 0..6), drag in 101i32..140,
+        fn the_right_side_goes_to_the_nearest_line_in_reach_that_leaves_a_width(
+            guide_at in prop::collection::vec(80i32..140, 0..5), layout_at in prop::collection::vec(80i32..140, 0..5), drag in 101i32..140,
         ) {
-            let guides_at: Vec<f64> = at.iter().map(|v| f64::from(*v) * 0.01).collect();
+            let to_x = |v: &Vec<i32>| -> Vec<f64> { v.iter().map(|v| f64::from(*v) * 0.01).collect() };
+            let (guides_at, layout_at) = (to_x(&guide_at), to_x(&layout_at));
             let x = f64::from(drag) * 0.01 - 0.0025;
-            let r = resize(&guides(&guides_at, &[]), &guides_only(), Rect::new(1.0, 1.0, x, 2.0), right(), Constraint::None);
-            let reach = 6.0 / 72.0;
-            let mut ok: Vec<f64> = guides_at.iter().copied().filter(|g| *g - 1.0 > 1e-6 && (g - x).abs() <= reach).collect();
+            let mut b = TargetsBuilder::new(craft_snap::Limits::default());
+            for g in &guides_at {
+                b.line(None, Axis::X, *g, None, Kind::Guide).unwrap();
+            }
+            for g in &layout_at {
+                b.line(None, Axis::X, *g, None, Kind::Layout).unwrap();
+            }
+            let s = only(&[(Kind::Guide, Reach::Screen(6.0), 1), (Kind::Layout, Reach::Screen(9.0), 1)]);
+            let r = resize(&b.build(), &s, Rect::new(1.0, 1.0, x, 2.0), right(), Constraint::None);
+            let mut ok: Vec<f64> = guides_at.iter().filter(|g| (*g - x).abs() <= 6.0 / 72.0).chain(layout_at.iter().filter(|g| (*g - x).abs() <= 9.0 / 72.0)).copied().filter(|g| *g - 1.0 > 1e-6).collect();
             ok.sort_by(|a, b| (a - x).abs().total_cmp(&(b - x).abs()));
             let want: Vec<f64> = match ok.first() {
                 None => vec![x],
                 Some(first) => ok.iter().copied().filter(|g| ((g - x).abs() - (first - x).abs()).abs() < 1e-9).collect(),
             };
             let got = sides(&r)[2];
-            prop_assert!(want.iter().any(|w| (got - w).abs() < 1e-9), "got {} want one of {:?} (guides {:?}, dragged to {})", got, want, guides_at, x);
+            prop_assert!(want.iter().any(|w| (got - w).abs() < 1e-9), "got {} want one of {:?} (guides {:?}, layout {:?}, dragged to {})", got, want, guides_at, layout_at, x);
             prop_assert_eq!(r.hits.is_empty(), ok.is_empty());
         }
     }
