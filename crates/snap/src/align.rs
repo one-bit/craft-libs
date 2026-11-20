@@ -297,9 +297,8 @@ pub(crate) fn lines_ahead(cx: &mut Ctx<'_>, angle: f64, s: f64, side: Side, up: 
         }
     }
     if let Some(r) = cx.s.align_reach.filter(|r| !matches!(r, Reach::Any)) {
-        let mut near = Vec::new();
-        from_near_objects(cx, r.document(cx.zoom).max(reach), angle, s, side, Pick::Nearest, &mut near);
-        out.extend(near.into_iter().filter(|f| if up { f.c > s && !cx.co.same(f.c, s) } else { f.c < s && !cx.co.same(f.c, s) }));
+        // The nearest of each kind strictly ahead, not the nearest of each kind (which may be behind the side, and hide the next one that is ahead).
+        from_near_objects(cx, r.document(cx.zoom).max(reach), angle, s, side, Pick::Past(up), &mut out);
     }
     out
 }
@@ -690,5 +689,24 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn a_line_of_an_object_near_the_subject_that_is_the_same_place_as_the_offset_is_not_past_it() {
+        // A shape of no width 5e-10 past the edge at 11 is the same place as it (the rule is 1e-9): not past it, going up, and not past it going down from 11
+        // + 5e-10. The next edge past 11 is the one at 19.
+        let objects = [
+            (0, TurnedBox::square(Point::new(10.0, 0.0), Size::new(2.0, 2.0))),
+            (1, TurnedBox::square(Point::new(11.0 + 5.0e-10, 0.0), Size::new(0.0, 2.0))),
+            (2, TurnedBox::square(Point::new(20.0, 0.0), Size::new(2.0, 2.0))),
+        ];
+        let t = built(&objects, &[]);
+        let s = Settings { align_reach: Some(Reach::Document(25.0)), ..Settings::default() };
+        let q = query(&s);
+        let mut cx = Ctx::new(&t, &q);
+        cx.region = kurbo::Rect::new(14.0 - t.origin.x, -1.0, 16.0 - t.origin.x, 1.0);
+        assert_eq!(past(&mut cx, 11.0, Side::Min, Kind::Edge, true), Some(19.0));
+        assert_eq!(past(&mut cx, 11.0 + 5.0e-10, Side::Min, Kind::Edge, false), Some(9.0));
+        // A line farther than the rule is past it.
+        assert_eq!(past(&mut cx, 11.0 - 5.0e-9, Side::Min, Kind::Edge, true), Some(11.0));
     }
 }

@@ -9,6 +9,7 @@ mod lattice_edge;
 mod modes;
 mod moves;
 mod next_place;
+mod nudge_reach;
 mod oracle;
 mod round2;
 mod spacing;
