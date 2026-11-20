@@ -362,8 +362,9 @@ mod resize_past_a_collapse {
         };
         // (The boxes are higher up than the one resized, so that none of their own sides lies along the sides of it.)
         let obj = |id: u64, x0: f64, x1: f64| (id, TurnedBox { centre: at(0.5 * (x0 + x1), 3.5), size: kurbo::Size::new(x1 - x0, 1.0), angle: turn });
-        // Edges at 1 and 1.1 for the side that moves at the max end; at 1 and 0.9 for the min side that moves, the max side being fixed at 1.
-        let boxes = if flip { [obj(1, 0.4, 0.9), obj(2, 1.0, 1.5)] } else { [obj(1, 0.5, 1.0), obj(2, 1.1, 1.6)] };
+        // Right edges at 1 and 1.1 for the side that moves at the max end; left edges at 1 and 0.9 for the min side that moves, the max side being fixed at 1
+        // (the two edges are of one set of the kind, so that the one that collapses the box is the nearest of them and nothing else offers the other).
+        let boxes = if flip { [obj(1, 1.0, 1.5), obj(2, 0.9, 1.4)] } else { [obj(1, 0.5, 1.0), obj(2, 0.6, 1.1)] };
         let mut b = TargetsBuilder::new(craft_snap::Limits::default());
         for (id, f) in boxes {
             b.object(craft_snap::Id(id), Object { frame: f, bounds: None, angle: None, parts: Parts::ALL }).unwrap();
@@ -407,7 +408,7 @@ mod resize_past_a_collapse {
             let r = turned_case(turn, 0.97, true);
             let (centre, width) = x(&r, turn);
             assert!((width - 0.1).abs() < 1e-9 && (centre - 0.95).abs() < 1e-9, "turn {turn} min side: {centre} {width} {:?}", r.hits);
-            assert_eq!((r.hits.len(), r.hits[0].kind, r.hits[0].id), (1, Kind::Edge, Some(craft_snap::Id(1))));
+            assert_eq!((r.hits.len(), r.hits[0].kind, r.hits[0].id), (1, Kind::Edge, Some(craft_snap::Id(2))));
         }
     }
 
