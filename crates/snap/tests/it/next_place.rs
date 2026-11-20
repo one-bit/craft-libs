@@ -700,6 +700,27 @@ mod resize_past_a_collapse {
         }
     }
 
+    #[test]
+    fn a_resize_that_keeps_its_proportions_compares_the_line_past_with_the_first_in_the_travel_of_the_dragged_side() {
+        // The scene of the line past halfway, taken 100 times larger from the fixed side at 1 (edges that pull from any distance): the right side of a box 3
+        // wide at a ratio of 2 is dragged to x = 4, and the left edge at 1 would scale the box to nothing. The middle of the side travels 3 for each unit of
+        // the scale, so the first line is 3 away and the right edge at 2 is 2 away: nearer, and on the lattice of 1 that takes the nearest right edge, 5.3, to
+        // 5. The two are to be told in the same units.
+        let boxes = [(1, Rect::new(1.0, 20.0, 21.0, 21.0)), (2, Rect::new(-49.0, 20.0, 5.3, 21.0)), (3, Rect::new(-69.0, 20.0, 2.0, 21.0))];
+        let t = world(&boxes, &[], &[]);
+        let s = only(&[(Kind::Edge, Reach::Any, 1)]);
+        let q = Query {
+            zoom: 1.0,
+            constraint: Constraint::Aspect { ratio: 2.0, about: About::Fixed },
+            rounding: craft_snap::Rounding::Position(kurbo::Vec2::new(1.0, 1.0)),
+            ..query(craft_snap::Subject::Edges { frame: rect_box(Rect::new(1.0, 1.0, 4.0, 2.5)), moving: right() }, &s)
+        };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+        assert!(close(sides(&r), [1.0, 1.5, 2.0, 2.0]), "{:?} {:?}", sides(&r), r.hits);
+        assert_eq!(r.hits.iter().map(|h| (h.kind, h.id)).collect::<Vec<_>>(), vec![(Kind::Edge, Some(craft_snap::Id(3)))]);
+    }
+
     /// Lines of three kinds across x for a box from 1 whose right side is dragged to `x`, and the rule written out: a guide pulls from 6 screen units, a
     /// layout line and a frame line from any distance. Of each kind the nearest line is the candidate; if it leaves no width the next line past it (above)
     /// is, provided that it is in the reach the first pulled from (a guide: its own; the others: no farther than the first was). `ranked` takes the kind
