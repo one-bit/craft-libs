@@ -299,8 +299,16 @@ fn degree_cands(cx: &mut Ctx<'_>, own: &Own, deg: &Degree, dirs: &[(f64, OwnOrBo
             }
         }
     }
+    let mut out = distinct(out);
     out.extend(size_cands(cx, own, deg));
     out
+}
+
+/// The candidates with each line met by each point once: the same line (kind, object, point, direction and place) is the nearest of its kind to one set
+/// of lines and the next past another set's nearest, and would be offered twice, filling the degree's list and pushing out one that is not a copy.
+fn distinct(cands: Vec<Cand>) -> Vec<Cand> {
+    let mut seen = std::collections::HashSet::new();
+    cands.into_iter().filter(|c| seen.insert((c.kind, c.id, c.pt, c.angle.to_bits(), c.c.to_bits()))).collect()
 }
 
 /// The lengths in a sorted array nearest to `len`, within one bisection: the two beside its insertion point, the nearer first.
@@ -678,5 +686,44 @@ mod tests {
         assert_eq!(near(-1.0), vec![(0.0, 7)], "nothing below");
         assert_eq!(near(9.0), vec![(4.0, 9)], "nothing above");
         assert!(nearest_lengths(&[], 1.0).is_empty());
+    }
+    #[test]
+    fn a_line_met_by_a_point_is_one_candidate_however_many_sets_of_its_kind_offered_it() {
+        use crate::frame::{Id, OwnOrBounds};
+        let base = Cand {
+            kind: Kind::Edge,
+            id: Some(Id(1)),
+            prio: 1,
+            reach: 1.0,
+            side: Side::Max,
+            own: OwnOrBounds::Bounds,
+            angle: 0.0,
+            c: 2.0,
+            s: 1.0,
+            d: 1.0,
+            t: 1.0,
+            pt: 5,
+        };
+        // The same line of the same object met by the same point: one, the first, whatever the rest of it says.
+        let again = Cand { d: 9.0, t: 9.0, prio: 3, s: 7.0, ..base };
+        let kept = distinct(vec![base, again, base]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].d, 1.0, "the first");
+        // A different kind, object, point, direction or place is another candidate, and the order is kept.
+        let others = [
+            Cand { kind: Kind::Centre, ..base },
+            Cand { id: Some(Id(2)), ..base },
+            Cand { id: None, ..base },
+            Cand { pt: 6, ..base },
+            Cand { angle: 1.0, ..base },
+            Cand { c: 2.0 + 1.0e-12, ..base },
+        ];
+        let mut all = vec![base];
+        all.extend(others);
+        all.push(base);
+        let kept = distinct(all.clone());
+        assert_eq!(kept.len(), 7);
+        assert!(kept.iter().zip(&all).all(|(a, b)| a == b), "in the order they came");
+        assert!(distinct(Vec::new()).is_empty());
     }
 }

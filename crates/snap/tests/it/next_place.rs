@@ -485,6 +485,25 @@ mod resize_past_a_collapse {
         }
     }
 
+    #[test]
+    fn a_line_another_set_of_its_kind_already_offers_is_not_offered_twice_and_does_not_push_out_one_that_holds() {
+        // A shape P from 0.95 to 2.13: its left edge would leave the box 1 to 2 no width, and the next edge past it is its own right edge, which is also the
+        // nearest of the right edges. With a guide at 2.11 and a layout line at 2.5, the right side dragged to 2 under a rounding of 0.25 meets, at each of
+        // its three points, the guide, the edge (twice, before) and the line: of the nine candidates that are not copies, the three nearest kinds are taken
+        // off their lines by the rounding and the layout line, on the lattice, holds; with the edge twice the eight kept were all the ones that fail.
+        let t = world(&[(1, Rect::new(0.95, 3.0, 2.13, 4.0))], &[2.11], &[(Axis::X, 2.5)]);
+        let s = only(&[(Kind::Guide, Reach::Screen(6.0), 1), (Kind::Edge, Reach::Screen(6.0), 1), (Kind::Layout, Reach::Screen(6.0), 1)]);
+        let q = Query {
+            zoom: 5.0,
+            rounding: craft_snap::Rounding::Position(kurbo::Vec2::new(0.25, 0.25)),
+            ..query(craft_snap::Subject::Edges { frame: rect_box(Rect::new(1.0, 0.0, 2.0, 1.0)), moving: right() }, &s)
+        };
+        let r = run(&t, &q);
+        r.check(&t, &q).unwrap_or_else(|b| panic!("{b:?}\n{r:?}"));
+        assert!(close(sides(&r), [1.0, 0.0, 2.5, 1.0]), "{:?} {:?}", sides(&r), r.hits);
+        assert_eq!(hit_kinds(&r), vec![(Kind::Layout, None, Some(0.0))]);
+    }
+
     /// A fixed seed, so that a run is the same run each time; `CRAFT_SNAP_CASES` and `CRAFT_SNAP_SEED` run a longer search, and each find is a case to read.
     fn config() -> ProptestConfig {
         let number = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(default);
